@@ -1948,14 +1948,38 @@ function getMainHTML(): string {
                     console.log('Received remote audio track');
                     console.log('Remote stream tracks:', e.streams[0].getTracks());
 
-                    // CRITICAL FOR iOS: Set playsinline via JavaScript (not HTML)
+                    // NEW iOS FIX: Use Web Audio API as primary playback method
+                    // Audio element is secondary (for UI/controls only)
+
+                    // Set up audio element for UI/controls
                     audioEl.playsInline = true;
                     audioEl.setAttribute('playsinline', 'true');
                     audioEl.setAttribute('webkit-playsinline', 'true');
 
-                    // CRITICAL FOR iOS: Start MUTED for autoplay to work
-                    audioEl.muted = true;
+                    // DON'T mute - let Web Audio API handle playback
+                    audioEl.muted = false;  // Changed: was true
+                    audioEl.volume = 1.0;
                     audioEl.srcObject = e.streams[0];
+
+                    // CRITICAL FOR iOS: Set up Web Audio API routing FIRST
+                    // This must happen before audio element plays
+                    try {
+                        if (globalAudioContext) {
+                            console.log('🎧 Setting up Web Audio API playback for iOS...');
+                            const remoteSource = globalAudioContext.createMediaStreamSource(e.streams[0]);
+                            remoteSource.connect(globalAudioContext.destination);
+                            console.log('✅ Web Audio API: Remote audio connected to speakers');
+                            addTerminalLine('Web Audio API playback enabled', 'success');
+
+                            // Store for monitoring
+                            window.remoteAudioSource = remoteSource;
+                        } else {
+                            console.warn('⚠️ globalAudioContext not available - Web Audio routing skipped');
+                        }
+                    } catch (err) {
+                        console.error('❌ Failed to set up Web Audio routing:', err);
+                        addTerminalLine('Web Audio routing failed: ' + err.message, 'error');
+                    }
 
                     // Update UI to show we're connected
                     const audioStats = document.getElementById('audioStats');
@@ -1967,10 +1991,12 @@ function getMainHTML(): string {
                         console.error('❌ audioStats element not found');
                     }
 
-                    // Start monitoring remote audio levels
-                    if (window.monitorRemoteAudio) {
-                        console.log('Calling monitorRemoteAudio...');
+                    // Start monitoring remote audio levels (for visualization only now)
+                    if (window.monitorRemoteAudio && !window.remoteAudioSource) {
+                        console.log('Calling monitorRemoteAudio for visualization...');
                         window.monitorRemoteAudio(e.streams[0]);
+                    } else if (window.remoteAudioSource) {
+                        console.log('Remote audio already routed via Web Audio API');
                     } else {
                         console.error('❌ monitorRemoteAudio not available');
                     }
@@ -1993,16 +2019,10 @@ function getMainHTML(): string {
                     };
 
                     audioEl.onplay = () => {
-                        console.log('Audio element started playing (muted)');
-                        addTerminalLine('Audio element playing', 'success');
-
-                        // CRITICAL FOR iOS: Unmute AFTER playback starts
-                        setTimeout(() => {
-                            audioEl.muted = false;
-                            audioEl.volume = 1.0;
-                            console.log('✅ Audio unmuted - volume set to 1.0');
-                            addTerminalLine('Audio unmuted - ready to hear AI', 'success');
-                        }, 100);
+                        console.log('✅ Audio element started playing');
+                        addTerminalLine('Audio element ready (Web Audio API handling playback)', 'success');
+                        // Note: Actual audio playback is handled by Web Audio API
+                        // Audio element is just for UI/controls
                     };
 
                     audioEl.onpause = () => {
@@ -2117,16 +2137,18 @@ function getMainHTML(): string {
                     // Also monitor REMOTE audio (what we should hear from OpenAI)
                     const monitorRemoteAudio = (remoteStream) => {
                         try {
-                            console.log('🎧 Setting up remote audio monitoring...');
-                            addTerminalLine('Setting up remote audio monitoring', 'info');
+                            console.log('🎧 Setting up remote audio monitoring (visualization only)...');
+                            addTerminalLine('Setting up remote audio level visualization', 'info');
 
                             const remoteAnalyser = audioContext.createAnalyser();
-                            const remoteSource = audioContext.createMediaStreamSource(remoteStream);
+
+                            // Use existing source if available (already connected to destination)
+                            // Otherwise create new source BUT don't connect to destination (duplicate)
+                            const remoteSource = window.remoteAudioSource || audioContext.createMediaStreamSource(remoteStream);
                             remoteSource.connect(remoteAnalyser);
 
-                            // IMPORTANT: Also connect to destination so we can hear it!
-                            remoteSource.connect(audioContext.destination);
-                            console.log('✅ Remote audio connected to speakers');
+                            // DON'T connect to destination - already done in ontrack handler
+                            console.log('✅ Remote audio analyser set up for visualization');
 
                             remoteAnalyser.fftSize = 256;
                             const remoteBufferLength = remoteAnalyser.frequencyBinCount;
