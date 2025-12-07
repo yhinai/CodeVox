@@ -183,19 +183,9 @@ When you use a tool, wait for the result before providing your response."""
             MAX_SILENCE_CHUNKS = int(1.5 * CHUNKS_PER_SECOND)  # 1.5s silence to stop
             MAX_TOTAL_CHUNKS = int(30.0 * CHUNKS_PER_SECOND)   # 30s max recording
             INITIAL_TIMEOUT_CHUNKS = int(5.0 * CHUNKS_PER_SECOND)  # 5s initial timeout
-            CALIBRATION_CHUNKS = 10  # First 10 chunks to measure noise floor
             
-            # Calibrate noise floor from first chunks
-            noise_samples = []
-            for _ in range(CALIBRATION_CHUNKS):
-                data = stream.read(self.chunk_size, exception_on_overflow=False)
-                frames.append(data)
-                samples = struct.unpack(f'{len(data)//2}h', data)
-                rms = math.sqrt(sum(s**2 for s in samples) / len(samples)) if samples else 0
-                noise_samples.append(rms)
-            
-            noise_floor = sum(noise_samples) / len(noise_samples)
-            SILENCE_THRESHOLD = max(noise_floor * 1.5, 300)  # 1.5x noise or min 300
+            # Fixed threshold that works reliably - speech is typically 1000-5000+ RMS
+            SILENCE_THRESHOLD = 800
             
             while len(frames) < MAX_TOTAL_CHUNKS:
                 data = stream.read(self.chunk_size, exception_on_overflow=False)
