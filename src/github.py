@@ -199,3 +199,56 @@ def fetch_pr_info(repo: str, pr_number: int) -> Optional[Dict]:
         import traceback
         traceback.print_exc()
         return None
+
+
+def respond_to_pr_comment(repo: str, pr_number: int, comment_id: int, body: str) -> Optional[Dict]:
+    """
+    Respond to a PR review comment.
+
+    Args:
+        repo: Repository in 'owner/repo' format
+        pr_number: Pull request number
+        comment_id: ID of the comment to respond to
+        body: The response text
+
+    Returns:
+        Dictionary with the created reply information or None if error
+    """
+    try:
+        owner, repo_name = repo.split('/')
+    except ValueError:
+        raise ValueError("Repository must be in 'owner/repo' format")
+
+    try:
+        g = _get_github_client()
+        repository = g.get_repo(f"{owner}/{repo_name}")
+        pr = repository.get_pull(pr_number)
+
+        # Get the review comment by ID
+        comment = None
+        for review_comment in pr.get_review_comments():
+            if review_comment.id == comment_id:
+                comment = review_comment
+                break
+
+        if not comment:
+            raise ValueError(f"Comment with ID {comment_id} not found in PR #{pr_number}")
+
+        # Create reply
+        reply = comment.create_reply(body)
+
+        # Return the reply information
+        reply_info = {
+            "id": reply.id if hasattr(reply, 'id') else None,
+            "body": reply.body if hasattr(reply, 'body') else None,
+            "user": {"login": reply.user.login} if (hasattr(reply, 'user') and reply.user) else None,
+            "created_at": reply.created_at.isoformat() if (hasattr(reply, 'created_at') and reply.created_at) else None,
+            "in_reply_to_id": comment_id,
+            "path": reply.path if hasattr(reply, 'path') else None,
+        }
+        return reply_info
+    except Exception as e:
+        print(f"Error responding to PR comment: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return None

@@ -27,7 +27,7 @@ from .process import (
 )
 from .discord_client import init_discord_client, send_to_discord
 from .claude import ask_claude_async, get_claude_status, get_claude_messages
-from .github import fetch_pr_comments, fetch_pr_info
+from .github import fetch_pr_comments, fetch_pr_info, respond_to_pr_comment
 
 # Load environment variables from .env file
 load_dotenv()
@@ -40,25 +40,25 @@ ENVS_FILE = Path(__file__).parent.parent / "envs.json"
 
 
 @mcp.tool()
-async def ask_claude(query: str) -> str:
-    """Ask Claude Code a question and get a response
+async def ask_coder(query: str) -> str:
+    """Ask Coding Agent a question and get a response
 
     Args:
-        query: The question or prompt to send to Claude Code
+        query: The question or prompt to send to Coding Agent
 
     Returns:
-        Claude Code's first response with a note about background processing
+        Coding Agent's first response with a note about background processing
     """
-    print(f"\n[API CALL] ask_claude - Query: {query[:100]}{'...' if len(query) > 100 else ''}")
+    print(f"\n[API CALL] ask_coder - Query: {query[:100]}{'...' if len(query) > 100 else ''}")
     return await ask_claude_async(query)
 
 
 @mcp.tool()
 def get_status() -> bool:
-    """Check if Claude Code is currently running
+    """Check if Coding Agent is currently running
 
     Returns:
-        True if Claude is still processing, False otherwise
+        True if Coding Agent is still processing, False otherwise
     """
     print(f"[API CALL] get_status")
     return get_claude_status()
@@ -66,10 +66,13 @@ def get_status() -> bool:
 
 @mcp.tool()
 def pop_messages() -> str:
-    """Get all intermediate messages from Claude Code execution
+    """Get all intermediate messages from Coding Agent execution
+
+    IMPORTANT: Do not call this tool unless the user explicitly asks for messages or execution details.
+    This should only be used when the user specifically requests to see intermediate messages.
 
     Returns:
-        JSON string containing all messages collected during Claude execution,
+        JSON string containing all messages collected during Coding Agent execution,
         including message type, text, and timestamp (seconds since start)
     """
     print(f"[API CALL] pop_messages")
@@ -86,73 +89,6 @@ def pop_messages() -> str:
         "message_count": len(messages),
         "messages": messages
     }, indent=2)
-
-
-@mcp.tool()
-def set_env(key: str, value: str) -> str:
-    """Set an environment variable
-
-    Args:
-        key: The environment variable name
-        value: The value to set
-
-    Returns:
-        Confirmation message
-    """
-    print(f"[API CALL] set_env - Key: {key}")
-    os.environ[key] = value
-    return f"Set environment variable {key}='{value}'"
-
-
-@mcp.tool()
-def get_env(key: str) -> str:
-    """Get an environment variable
-
-    Args:
-        key: The environment variable name
-
-    Returns:
-        The environment variable value or error message
-    """
-    print(f"[API CALL] get_env - Key: {key}")
-    value = os.getenv(key)
-    if value is None:
-        return f"Environment variable '{key}' is not set"
-    return f"{key}='{value}'"
-
-
-@mcp.tool()
-def list_env() -> str:
-    """List all environment variables
-
-    Returns:
-        List of all environment variables
-    """
-    print(f"[API CALL] list_env")
-    env_vars = dict(os.environ)
-    if not env_vars:
-        return "No environment variables set"
-
-    # Format as key=value pairs
-    formatted = "\n".join(f"{k}={v}" for k, v in sorted(env_vars.items()))
-    return f"Environment variables:\n{formatted}"
-
-
-@mcp.tool()
-def delete_env(key: str) -> str:
-    """Delete an environment variable
-
-    Args:
-        key: The environment variable name to delete
-
-    Returns:
-        Confirmation message
-    """
-    print(f"[API CALL] delete_env - Key: {key}")
-    if key in os.environ:
-        del os.environ[key]
-        return f"Deleted environment variable '{key}'"
-    return f"Environment variable '{key}' does not exist"
 
 
 @mcp.tool()
@@ -216,7 +152,7 @@ def get_current_environment() -> str:
 
 @mcp.tool()
 async def switch_environment(environment_name: str) -> str:
-    """Switch Claude Code's working directory to a specific project environment
+    """Switch Coding Agent's working directory to a specific project environment
 
     Args:
         environment_name: The name/key of the environment to switch to
@@ -250,59 +186,6 @@ async def switch_environment(environment_name: str) -> str:
     result += f"Working directory: {path}"
 
     return result
-
-
-@mcp.tool()
-def run_project(environment_name: str) -> str:
-    """Execute the run script for a specific project environment
-
-    Args:
-        environment_name: The name/key of the environment whose script to run
-
-    Returns:
-        Output from the run script
-    """
-    print(f"[API CALL] run_project - Environment: {environment_name}")
-    data = load_envs()
-    environments = data.get("environments", {})
-
-    if environment_name not in environments:
-        available = ", ".join(environments.keys())
-        return f"Environment '{environment_name}' not found. Available: {available}"
-
-    env = environments[environment_name]
-    run_script = env.get('run_script')
-
-    if not run_script:
-        return f"Environment '{environment_name}' has no run script configured"
-
-    if not os.path.exists(run_script):
-        return f"Run script does not exist: {run_script}"
-
-    try:
-        # Run the script in the environment's directory
-        path = env.get('path', os.path.dirname(run_script))
-        result = subprocess.run(
-            [run_script],
-            cwd=path,
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-
-        output = f"Executed: {run_script}\n"
-        output += f"Exit code: {result.returncode}\n\n"
-
-        if result.stdout:
-            output += f"STDOUT:\n{result.stdout}\n"
-        if result.stderr:
-            output += f"STDERR:\n{result.stderr}\n"
-
-        return output
-    except subprocess.TimeoutExpired:
-        return f"Script execution timed out after 30 seconds: {run_script}"
-    except Exception as e:
-        return f"Error running script: {str(e)}"
 
 
 @mcp.tool()
@@ -406,207 +289,22 @@ async def restart_cmd(pid: int) -> int:
 
 
 @mcp.tool()
-async def debug_redis() -> str:
-    """Debug tool to see all Redis keys and their values
-
-    Returns:
-        All Redis keys related to processes
-    """
-    print(f"[API CALL] debug_redis")
-    r = await get_redis()
-
-    result = "Redis Debug Information:\n\n"
-
-    # Get all keys
-    all_keys = []
-    async for key in r.scan_iter("*"):
-        all_keys.append(key)
-
-    if not all_keys:
-        return "No keys found in Redis"
-
-    result += f"Total keys: {len(all_keys)}\n\n"
-
-    # Group by process
-    process_keys = {}
-    other_keys = []
-
-    for key in sorted(all_keys):
-        if key.startswith("process:"):
-            parts = key.split(":")
-            if len(parts) >= 2:
-                proc_name = parts[1]
-                if proc_name not in process_keys:
-                    process_keys[proc_name] = []
-                process_keys[proc_name].append(key)
-        else:
-            other_keys.append(key)
-
-    # Show process keys
-    if process_keys:
-        result += "Process Keys:\n"
-        for proc_name, keys in process_keys.items():
-            result += f"\n  Process: {proc_name}\n"
-            for key in keys:
-                if ":info" in key:
-                    info = await r.hgetall(key)
-                    result += f"    {key}: {info}\n"
-                elif ":logs" in key:
-                    log_count = await r.llen(key)
-                    result += f"    {key}: {log_count} entries\n"
-                else:
-                    value = await r.get(key)
-                    result += f"    {key}: {value}\n"
-
-    # Show other keys
-    if other_keys:
-        result += "\nOther Keys:\n"
-        for key in other_keys:
-            value = await r.get(key)
-            result += f"  {key}: {value}\n"
-
-    return result
-
-
-@mcp.tool()
-def find_process_children(pid: int) -> str:
-    """Find all child processes of a given PID using ps
-
-    Args:
-        pid: Parent process ID
-
-    Returns:
-        List of child processes
-    """
-    print(f"[API CALL] find_process_children - PID: {pid}")
-
-    try:
-        result = subprocess.run(
-            ['ps', '--ppid', str(pid), '-o', 'pid,cmd', '--no-headers'],
-            capture_output=True,
-            text=True
-        )
-
-        if result.returncode != 0 or not result.stdout.strip():
-            return f"No child processes found for PID {pid}"
-
-        return f"Child processes of PID {pid}:\n{result.stdout}"
-    except Exception as e:
-        return f"Error finding children of PID {pid}: {e}"
-
-
-@mcp.tool()
-async def list_processes() -> str:
-    """List all managed processes and their status
-
-    Returns:
-        List of all processes with their PIDs and details
-    """
-    print(f"[API CALL] list_processes")
-    processes = await list_all_processes()
-
-    if not processes:
-        return "No processes being managed"
-
-    result = "Managed processes:\n\n"
-    for pid in sorted(processes.keys()):
-        info = processes[pid]
-
-        result += f"PID {pid}"
-        result += " [ALIVE]" if info['is_alive'] else " [DEAD]"
-        result += "\n"
-        result += f"  Command: {info.get('cmd', 'N/A')}\n"
-        result += f"  Environment: {info.get('env', 'N/A')}\n"
-        result += f"  Working dir: {info.get('cwd', 'N/A')}\n"
-
-        if 'exit_code' in info:
-            started_at = float(info.get('started_at', 0))
-            ended_at = float(info.get('ended_at', 0))
-            result += f"  Status: Stopped (exit code: {info['exit_code']})\n"
-            result += f"  Runtime: {ended_at - started_at:.1f}s\n"
-        else:
-            started_at = float(info.get('started_at', time.time()))
-            runtime = time.time() - started_at
-            result += f"  Status: Running\n"
-            result += f"  Runtime: {runtime:.1f}s\n"
-
-        if info['log_count'] > 0:
-            result += f"  Logs: {info['log_count']} lines ✓\n"
-        else:
-            result += f"  Logs: 0 lines (no output yet)\n"
-        result += "\n"
-
-    return result.strip()
-
-
-@mcp.tool()
-async def get_process_logs(pid: int, tail: int = None) -> str:
-    """Get logs from a process by PID
-
-    Args:
-        pid: Process ID
-        tail: Optional number of most recent lines to return (default: all)
-
-    Returns:
-        Process logs as formatted text
-    """
-    print(f"[API CALL] get_process_logs - PID: {pid}, Tail: {tail}")
-
-    data = await get_process_logs_data(pid, tail)
-    if not data:
-        return f"Process {pid} not found"
-
-    proc_info = data['info']
-    logs = data['logs']
-
-    if not logs:
-        status = "stopped" if 'exit_code' in proc_info else "running"
-        return f"No logs yet for process {pid} (status: {status})"
-
-    # Format logs
-    result = f"Logs for PID {pid}:\n"
-    result += f"Command: {proc_info.get('cmd', 'N/A')}\n"
-    result += f"Environment: {proc_info.get('env', 'N/A')}\n"
-    started_at = float(proc_info.get('started_at', 0))
-    result += f"Started: {time.ctime(started_at)}\n"
-
-    if 'exit_code' in proc_info:
-        result += f"Exit code: {proc_info['exit_code']}\n"
-
-    result += "\n" + "=" * 70 + "\n\n"
-
-    for log_entry in logs:
-        log_type = log_entry.get('type', 'stdout')
-        line = log_entry.get('line', '')
-        prefix = "[STDERR]" if log_type == 'stderr' else "[STDOUT]"
-        result += f"{prefix} {line}\n"
-
-    return result
-
-
-@mcp.tool()
-def get_pr_comments(pr_number: int, environment_name: str = "Default", include_outdated: bool = False) -> str:
-    """Get PR comments for a specific PR number
+def get_pr_comments(pr_number: int, include_outdated: bool = False) -> str:
+    """Get PR comments for a specific PR number from the current environment
 
     Args:
         pr_number: Pull request number
-        environment_name: Optional environment name to get github_repo from. If not provided, uses current environment.
         include_outdated: If True, include outdated review comments
 
     Returns:
         JSON string with PR comments
     """
-    print(f"[API CALL] get_pr_comments - PR: {pr_number}, Env: {environment_name}")
+    # Get current environment
+    env_key, env = get_current_environment_sync()
+    if not env:
+        return json.dumps({"error": "Not in a configured environment. Please switch to an environment first using switch_environment."}, indent=2)
 
-    # Get environment
-    if environment_name:
-        env = get_environment_by_name(environment_name)
-        if not env:
-            return json.dumps({"error": f"Environment '{environment_name}' not found"}, indent=2)
-    else:
-        env_key, env = get_current_environment_sync()
-        if not env:
-            return json.dumps({"error": "Not in a configured environment. Please specify environment_name or switch to an environment."}, indent=2)
+    print(f"[API CALL] get_pr_comments - PR: {pr_number}, Env: {env_key}")
 
     # Get github_repo from environment
     github_repo = env.get('github_repo')
@@ -621,28 +319,21 @@ def get_pr_comments(pr_number: int, environment_name: str = "Default", include_o
 
 
 @mcp.tool()
-def get_active_pr_comments(environment_name: str = None, include_outdated: bool = False) -> str:
-    """Get comments for all active PRs in an environment
+def get_active_pr_comments(include_outdated: bool = False) -> str:
+    """Get comments for all active PRs in the current environment
 
     Args:
-        environment_name: Optional environment name. If not provided, uses current environment.
         include_outdated: If True, include outdated review comments
 
     Returns:
         JSON string with all active PR comments
     """
-    print(f"[API CALL] get_active_pr_comments - Env: {environment_name}")
+    # Get current environment
+    env_key, env = get_current_environment_sync()
+    if not env:
+        return json.dumps({"error": "Not in a configured environment. Please switch to an environment first using switch_environment."}, indent=2)
 
-    # Get environment
-    if environment_name:
-        env = get_environment_by_name(environment_name)
-        env_key = environment_name
-        if not env:
-            return json.dumps({"error": f"Environment '{environment_name}' not found"}, indent=2)
-    else:
-        env_key, env = get_current_environment_sync()
-        if not env:
-            return json.dumps({"error": "Not in a configured environment. Please specify environment_name or switch to an environment."}, indent=2)
+    print(f"[API CALL] get_active_pr_comments - Env: {env_key}")
 
     # Get github_repo and active_prs from environment
     github_repo = env.get('github_repo')
@@ -687,27 +378,21 @@ def get_active_pr_comments(environment_name: str = None, include_outdated: bool 
 
 
 @mcp.tool()
-def get_pr_info_tool(pr_number: int, environment_name: str = None) -> str:
-    """Get PR information including title, description, status, etc.
+def get_pr_info_tool(pr_number: int) -> str:
+    """Get PR information including title, description, status, etc. from the current environment
 
     Args:
         pr_number: Pull request number
-        environment_name: Optional environment name to get github_repo from. If not provided, uses current environment.
 
     Returns:
         JSON string with PR information
     """
-    print(f"[API CALL] get_pr_info - PR: {pr_number}, Env: {environment_name}")
+    # Get current environment
+    env_key, env = get_current_environment_sync()
+    if not env:
+        return json.dumps({"error": "Not in a configured environment. Please switch to an environment first using switch_environment."}, indent=2)
 
-    # Get environment
-    if environment_name:
-        env = get_environment_by_name(environment_name)
-        if not env:
-            return json.dumps({"error": f"Environment '{environment_name}' not found"}, indent=2)
-    else:
-        env_key, env = get_current_environment_sync()
-        if not env:
-            return json.dumps({"error": "Not in a configured environment. Please specify environment_name or switch to an environment."}, indent=2)
+    print(f"[API CALL] get_pr_info - PR: {pr_number}, Env: {env_key}")
 
     # Get github_repo from environment
     github_repo = env.get('github_repo')
@@ -719,6 +404,39 @@ def get_pr_info_tool(pr_number: int, environment_name: str = None) -> str:
         if pr_info is None:
             return json.dumps({"error": "Failed to fetch PR info"}, indent=2)
         return json.dumps(pr_info, indent=2)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, indent=2)
+
+
+@mcp.tool()
+def add_pr_comment_respond(pr_number: int, comment_id: int, response_body: str) -> str:
+    """Respond to a PR review comment from the current environment
+
+    Args:
+        pr_number: Pull request number
+        comment_id: ID of the review comment to respond to
+        response_body: The text of the response
+
+    Returns:
+        JSON string with the created reply information
+    """
+    # Get current environment
+    env_key, env = get_current_environment_sync()
+    if not env:
+        return json.dumps({"error": "Not in a configured environment. Please switch to an environment first using switch_environment."}, indent=2)
+
+    print(f"[API CALL] add_pr_comment_respond - PR: {pr_number}, Comment ID: {comment_id}, Env: {env_key}")
+
+    # Get github_repo from environment
+    github_repo = env.get('github_repo')
+    if not github_repo:
+        return json.dumps({"error": f"Environment has no github_repo configured"}, indent=2)
+
+    try:
+        reply_info = respond_to_pr_comment(github_repo, pr_number, comment_id, response_body)
+        if reply_info is None:
+            return json.dumps({"error": "Failed to create reply"}, indent=2)
+        return json.dumps({"success": True, "reply": reply_info}, indent=2)
     except Exception as e:
         return json.dumps({"error": str(e)}, indent=2)
 
