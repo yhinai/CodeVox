@@ -585,7 +585,7 @@ async def get_process_logs(pid: int, tail: int = None) -> str:
 
 
 @mcp.tool()
-def get_pr_comments(pr_number: int, environment_name: str = None, include_outdated: bool = False) -> str:
+def get_pr_comments(pr_number: int, environment_name: str = "Default", include_outdated: bool = False) -> str:
     """Get PR comments for a specific PR number
 
     Args:
