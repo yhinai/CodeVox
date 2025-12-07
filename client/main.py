@@ -6,6 +6,12 @@ Single entry point for all voice assistant modes.
 import typer
 from typing import Optional
 import structlog
+import sys
+import os
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from src.config import settings
 
 app = typer.Typer(
     name="claude-voice",
@@ -22,7 +28,7 @@ def start(
     no_tts: bool = typer.Option(False, "--no-tts", help="Speak input, read output"),
     voice: str = typer.Option("ara", "--voice", "-v", help="TTS voice (ara, rex, sal, eve, una, leo)"),
     model: str = typer.Option("grok-4-1-fast", "--model", "-m", help="Grok model to use"),
-    mcp_server: str = typer.Option("https://dex-mcp.tunn.dev/mcp", "--mcp", help="MCP server URL"),
+    mcp_server: str = typer.Option(None, "--mcp", help="MCP server URL (defaults to MCP_BASE_URL from .env)"),
 ):
     """
     Start the voice assistant.
@@ -34,6 +40,13 @@ def start(
         client start --voice rex        # Different voice
     """
     from .assistant import VoiceAssistant
+    
+    # Use settings for MCP URL if not provided via CLI
+    if mcp_server is None:
+        mcp_server = settings.client_mcp_url
+    
+    # Get display URLs (base, mcp_endpoint)
+    base_url, mcp_url = settings.client_display_urls
     
     # Determine mode
     if text_only:
@@ -54,7 +67,8 @@ def start(
 ║  Mode: {mode:<52} ║
 ║  Voice: {voice:<51} ║
 ║  Model: {model:<51} ║
-║  MCP: {mcp_server:<53} ║
+║  MCP Base: {base_url:<48} ║
+║  MCP Endpoint: {mcp_url:<44} ║
 ╚══════════════════════════════════════════════════════════════╝
     """)
     

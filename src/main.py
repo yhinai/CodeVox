@@ -287,7 +287,7 @@ def main():
 ╔══════════════════════════════════════════════════════════════╗
 ║           Claude Code MCP Server - Lean Edition              ║
 ╠══════════════════════════════════════════════════════════════╣
-║  URL: http://{settings.MCP_HOST}:{settings.MCP_PORT}                                  ║
+║  URL: {settings.server_public_url:<53} ║
 ║  Tools: 11 (coding, process, environment, github)            ║
 ╚══════════════════════════════════════════════════════════════╝
     """)

@@ -9,6 +9,11 @@ import structlog
 from dotenv import load_dotenv
 from .mcp_client import MCPClient, CLAUDE_CODE_MCP_TOOLS
 
+# Add parent directory to path for imports
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from src.config import settings
+
 # Load .env file
 load_dotenv()
 
@@ -23,12 +28,13 @@ class VoiceAssistant:
         mode: str = "voice",
         voice: str = "ara",
         model: str = "grok-4-1-fast",
-        mcp_server: str = "http://127.0.0.1:6030/mcp"
+        mcp_server: str = None  # Will use settings.client_mcp_url if None
     ):
         self.mode = mode
         self.voice = voice
         self.model = model
-        self.mcp_server = mcp_server
+        # Use settings-based URL if not provided
+        self.mcp_server = mcp_server if mcp_server else settings.client_mcp_url
         self.api_key = os.getenv("XAI_API_KEY", "")
         
         # Audio settings
