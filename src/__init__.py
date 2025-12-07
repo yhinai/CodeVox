@@ -1,9 +1,9 @@
-"""Claude Code MCP Server - Lean Edition"""
+"""Claude Code MCP Server"""
 
 from .environment import load_envs, get_current_environment, set_current_environment
 from .github import fetch_pr_comments, fetch_pr_info, respond_to_pr_comment
 from .process import start_process, stop_process, list_all_processes
-from .claude import ask_claude_async, ClaudeSession, get_default_session
+from .claude import ClaudeSession, get_default_session
 
 __all__ = [
     'load_envs',
@@ -15,7 +15,6 @@ __all__ = [
     'start_process',
     'stop_process',
     'list_all_processes',
-    'ask_claude_async',
     'ClaudeSession',
     'get_default_session',
 ]
