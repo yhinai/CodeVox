@@ -294,7 +294,6 @@ def main():
 ╠══════════════════════════════════════════════════════════════╣
 ║  URL: http://{settings.MCP_HOST}:{settings.MCP_PORT}                                  ║
 ║  Tools: 11 (coding, process, environment, github)            ║
-║  Redis: Not required                                         ║
 ╚══════════════════════════════════════════════════════════════╝
     """)
     uvicorn.run(
