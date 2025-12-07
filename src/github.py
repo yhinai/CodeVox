@@ -6,6 +6,12 @@ from typing import Dict, List, Optional
 from github import Github, Auth
 from dotenv import load_dotenv
 
+try:
+    from .config import settings
+    GH_TOKEN = settings.GH_TOKEN
+except ImportError:
+    GH_TOKEN = os.getenv("GH_TOKEN")
+
 # Load environment variables from .env file
 load_dotenv()
 

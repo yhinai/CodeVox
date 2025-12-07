@@ -7,11 +7,7 @@
       "description": "Todo list Project",
       "active_prs": [{"pr_num": 1, "branch_name": "new_features"}],
       "github_repo": "hackgt1332/test_repo"
-
-
     }
-
   },
-  
   "current_env": ""
 }

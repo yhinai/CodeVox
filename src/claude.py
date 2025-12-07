@@ -1,150 +1,190 @@
-"""Claude SDK integration for agent interactions"""
+"""Claude SDK integration - Class-based architecture (no global state)."""
 
 import asyncio
+import json
 import time
-from typing import List, Dict
-from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, AssistantMessage, TextBlock
-from .discord_client import send_to_discord
+from dataclasses import dataclass, field
+from typing import Any, List, Optional
 
+import structlog
 
-# Global state for tracking Claude execution
-_claude_running = False
-_claude_messages: List[Dict] = []  # Stack of intermediate messages
-_claude_start_time = None
-
-
-async def get_claude_client():
-    """Create a new Claude SDK client for each request"""
-    options = ClaudeAgentOptions(
-        include_partial_messages=True,  # Enable streaming to capture intermediate messages
-        permission_mode='bypassPermissions'  # Never ask for permission - auto-approve all actions
+try:
+    from claude_agent_sdk import (
+        ClaudeAgent,
+        ClaudeAgentOptions,
+        Query,
+        ResultMessage,
+        ToolResultBlockContent,
     )
-    return ClaudeSDKClient(options=options)
+    CLAUDE_SDK_AVAILABLE = True
+except ImportError:
+    CLAUDE_SDK_AVAILABLE = False
+
+log = structlog.get_logger()
 
 
-async def process_claude_query(query: str, first_message_event: asyncio.Event):
-    """Background task to process Claude's full response"""
-    global _claude_running, _claude_messages, _claude_start_time
+@dataclass
+class ClaudeMessage:
+    """A message from Claude during processing."""
+    content: str
+    message_type: str
+    timestamp: float = field(default_factory=time.time)
+    raw: Any = None
 
-    try:
-        client = await get_claude_client()
 
-        async with client:
-            # Send query to Claude
-            await client.query(query)
+class ClaudeSession:
+    """Manages a Claude coding session with state encapsulated in the instance."""
 
-            # Collect the response
-            async for msg in client.receive_response():
-                print(f"[DEBUG] Received message type: {type(msg).__name__}")
+    def __init__(self, working_dir: str = "."):
+        self.working_dir = working_dir
+        self.running = False
+        self.messages: List[ClaudeMessage] = []
+        self.start_time: Optional[float] = None
+        self.first_response: Optional[str] = None
+        self._task: Optional[asyncio.Task] = None
 
-                # Extract text from AssistantMessage
-                if isinstance(msg, AssistantMessage):
-                    for block in msg.content:
-                        if isinstance(block, TextBlock):
-                            message_text = block.text
-                            # Add to message stack
-                            msg_entry = {
-                                "type": "assistant",
-                                "text": message_text,
-                                "timestamp": time.time() - _claude_start_time
-                            }
-                            _claude_messages.append(msg_entry)
-                            print(f"[DEBUG] Added assistant message: {message_text[:100]}...")
+    def is_running(self) -> bool:
+        """Check if Claude is currently processing."""
+        return self.running
 
-                            # Signal that first message is ready
-                            if not first_message_event.is_set():
-                                first_message_event.set()
+    def pop_messages(self) -> List[ClaudeMessage]:
+        """Get and clear all collected messages."""
+        msgs = self.messages.copy()
+        self.messages.clear()
+        return msgs
 
-                            # Send to Discord
-                            await send_to_discord(f"🤖 **Claude**: {message_text}")
-
-                # Get final result
-                elif isinstance(msg, ResultMessage):
-                    result_text = str(msg.result) if msg.result else None
-                    if result_text:
-                        msg_entry = {
-                            "type": "result",
-                            "text": result_text,
-                            "timestamp": time.time() - _claude_start_time
-                        }
-                        _claude_messages.append(msg_entry)
-                        print(f"[DEBUG] Added result message")
-
-                        # Signal that first message is ready (if we get result first)
-                        if not first_message_event.is_set():
-                            first_message_event.set()
-
-                        # Send to Discord
-                        await send_to_discord(f"✅ **Result**: {result_text}")
-
-    except Exception as e:
-        print(f"Error in background Claude processing: {e}")
-        error_entry = {
-            "type": "error",
-            "text": str(e),
-            "timestamp": time.time() - _claude_start_time
+    def get_status(self) -> dict:
+        """Get current session status."""
+        return {
+            "running": self.running,
+            "message_count": len(self.messages),
+            "start_time": self.start_time,
+            "elapsed": time.time() - self.start_time if self.start_time else None,
         }
-        _claude_messages.append(error_entry)
-        # Signal event even on error
-        if not first_message_event.is_set():
-            first_message_event.set()
-    finally:
-        # Clear running status
-        global _claude_running
-        _claude_running = False
-        print("[DEBUG] Claude background processing completed")
 
+    async def ask(self, query: str) -> str:
+        """
+        Send a query to Claude and return immediately with first response.
+        Processing continues in background.
+        """
+        if not CLAUDE_SDK_AVAILABLE:
+            return "Error: claude_agent_sdk not installed"
 
-async def ask_claude_async(query: str) -> str:
-    """
-    Ask Claude Code a question and get a response
+        if self.running:
+            return "Claude is already processing a query. Wait for completion."
 
-    Args:
-        query: The question or prompt to send to Claude Code
+        self.running = True
+        self.start_time = time.time()
+        self.first_response = None
+        self.messages.clear()
 
-    Returns:
-        Claude Code's first response with a note about background processing
-    """
-    global _claude_running, _claude_messages, _claude_start_time
+        log.info("claude.ask.started", query_preview=query[:100])
 
-    # Set running status
-    _claude_running = True
-    _claude_messages = []  # Clear message stack
-    _claude_start_time = time.time()
+        # Start background task
+        self._task = asyncio.create_task(self._process_query(query))
 
-    # Event to signal when first message is ready
-    first_message_event = asyncio.Event()
+        # Wait for first response or timeout
+        timeout = 30
+        start_wait = time.time()
+        while self.first_response is None and (time.time() - start_wait) < timeout:
+            await asyncio.sleep(0.1)
+            if not self.running:
+                break
 
-    # Start background processing task
-    asyncio.create_task(process_claude_query(query, first_message_event))
-
-    try:
-        # Wait for first message (with timeout)
-        await asyncio.wait_for(first_message_event.wait(), timeout=30.0)
-
-        # Get the first message from the stack
-        if _claude_messages:
-            first_msg = _claude_messages[0]
-            first_text = first_msg.get("text", "")
-            note = "\n\n---\n⚙️ Claude is still working in the background. Use pop_messages() to see progress."
-            return first_text + note
+        if self.first_response:
+            return f"{self.first_response}\n\n(Claude is still processing in background. Use get_status() to check.)"
+        elif not self.running:
+            return "Claude finished without response"
         else:
-            note = "\n\n---\n⚙️ Claude is working in the background. Use pop_messages() to see progress."
-            return "Claude is processing your request..." + note
+            return "Waiting for Claude response (processing in background)..."
 
-    except asyncio.TimeoutError:
-        print("[DEBUG] Timeout waiting for first message")
-        note = "\n\n---\n⚙️ Claude is working in the background. Use pop_messages() to see progress."
-        return "Claude is processing your request (taking longer than expected)..." + note
+    async def _process_query(self, query: str):
+        """Background task to process Claude query."""
+        try:
+            options = ClaudeAgentOptions(
+                stream_partial_assistant_message=True,
+                bypass_permissions=True,
+                cwd=self.working_dir,
+            )
+
+            agent = ClaudeAgent(options)
+
+            async for message in agent.query(Query(query=query)):
+                # Process message
+                msg_content = self._extract_content(message)
+                
+                if msg_content:
+                    claude_msg = ClaudeMessage(
+                        content=msg_content,
+                        message_type=type(message).__name__,
+                        raw=message
+                    )
+                    self.messages.append(claude_msg)
+
+                    # Set first response
+                    if self.first_response is None:
+                        self.first_response = msg_content
+                        log.info("claude.first_response", preview=msg_content[:100])
+
+                # Check for completion
+                if isinstance(message, ResultMessage):
+                    log.info("claude.completed", message_count=len(self.messages))
+                    break
+
+        except Exception as e:
+            log.error("claude.error", error=str(e))
+            self.messages.append(ClaudeMessage(
+                content=f"Error: {str(e)}",
+                message_type="error"
+            ))
+        finally:
+            self.running = False
+            elapsed = time.time() - (self.start_time or time.time())
+            log.info("claude.session_ended", elapsed=f"{elapsed:.2f}s")
+
+    def _extract_content(self, message) -> Optional[str]:
+        """Extract readable content from a Claude message."""
+        try:
+            # Handle different message types
+            if hasattr(message, 'message') and hasattr(message.message, 'content'):
+                content = message.message.content
+                if isinstance(content, list):
+                    texts = []
+                    for block in content:
+                        if hasattr(block, 'text'):
+                            texts.append(block.text)
+                        elif hasattr(block, 'type') and block.type == 'tool_use':
+                            texts.append(f"[Tool: {getattr(block, 'name', 'unknown')}]")
+                    return ' '.join(texts) if texts else None
+                return str(content) if content else None
+
+            if isinstance(message, ResultMessage) and hasattr(message, 'subtype'):
+                return f"[Result: {message.subtype}]"
+
+            if hasattr(message, 'content'):
+                if isinstance(message.content, ToolResultBlockContent):
+                    return f"[Tool Result]"
+                return str(message.content)
+
+        except Exception as e:
+            log.warning("claude.extract_failed", error=str(e))
+        
+        return None
 
 
-def get_claude_status() -> bool:
-    """Check if Claude Code is currently running"""
-    global _claude_running
-    return _claude_running
+# Default session (for backwards compatibility)
+_default_session: Optional[ClaudeSession] = None
 
 
-def get_claude_messages() -> List[Dict]:
-    """Get all intermediate messages from Claude Code execution"""
-    global _claude_messages
-    return _claude_messages.copy()
+def get_default_session(working_dir: str = ".") -> ClaudeSession:
+    """Get or create the default session."""
+    global _default_session
+    if _default_session is None:
+        _default_session = ClaudeSession(working_dir)
+    return _default_session
+
+
+async def ask_claude_async(query: str, working_dir: str = ".") -> str:
+    """Convenience function using default session."""
+    session = get_default_session(working_dir)
+    return await session.ask(query)
