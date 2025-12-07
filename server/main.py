@@ -40,6 +40,12 @@ def list_projects() -> str:
     return engine.list_projects()
 
 
+@mcp.tool()
+def list_projects_json() -> str:
+    """List all discovered projects as a JSON string for client apps."""
+    return json.dumps(engine.list_projects_data(), indent=2)
+
+
 # =============================================================================
 # EXECUTION TOOLS
 # =============================================================================
@@ -130,7 +136,7 @@ def main():
 ║           Claude Autonomous MCP Server v3.1                  ║
 ╠══════════════════════════════════════════════════════════════╣
 ║  URL: {settings.mcp_endpoint:<53} ║
-║  Tools: 8 (discovery, execution, github, claude)             ║
+║  Tools: 9 (discovery, execution, github, claude)             ║
 ╠══════════════════════════════════════════════════════════════╣
 ║  {discovery_result.split(chr(10))[0]:<60} ║
 ╚══════════════════════════════════════════════════════════════╝

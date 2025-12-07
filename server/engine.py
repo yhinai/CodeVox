@@ -11,6 +11,7 @@ import atexit
 import structlog
 import aiohttp
 from pathlib import Path
+import dataclasses
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
@@ -183,6 +184,16 @@ class Engine:
             pass
         return None
     
+    def list_projects_data(self) -> List[Dict]:
+        """Return list of projects as dictionaries (for JSON API)."""
+        # Convert Path objects to strings for JSON serialization
+        results = []
+        for p in self.projects.values():
+            d = dataclasses.asdict(p)
+            d['path'] = str(d['path'])
+            results.append(d)
+        return results
+
     def list_projects(self) -> str:
         """List all discovered projects with metadata."""
         if not self.projects:
