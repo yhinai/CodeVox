@@ -4,9 +4,10 @@ import asyncio
 import json
 import os
 import base64
-from typing import Optional
+from typing import Optional, List, Dict
 import structlog
 from dotenv import load_dotenv
+from .mcp_client import MCPClient, CLAUDE_CODE_MCP_TOOLS
 
 # Load .env file
 load_dotenv()
@@ -35,11 +36,16 @@ class VoiceAssistant:
         self.chunk_size = 1024
         
         # Conversation history for multi-turn context
-        self.conversation_history = []
-        self.system_prompt = """You are a helpful voice assistant with access to MCP (Model Context Protocol) tools.
-When the user asks you to perform coding tasks, use the available MCP tools.
+        self.conversation_history: List[Dict] = []
+        
+        # MCP client for tool execution  
+        self.mcp_client = MCPClient(mcp_server)
+        self.tools = CLAUDE_CODE_MCP_TOOLS  # Use hardcoded tools
+        
+        self.system_prompt = """You are a helpful voice assistant with access to coding tools.
+When the user asks you to perform tasks like listing environments, checking status, or running commands, use the available function tools.
 Be concise in responses since they will be spoken aloud.
-Announce when you're using tools so the user knows what's happening."""
+When you use a tool, wait for the result before providing your response."""
         
         if not self.api_key:
             raise ValueError("XAI_API_KEY environment variable not set")
@@ -216,7 +222,7 @@ Announce when you're using tools so the user knows what's happening."""
             return None
     
     async def _ask_grok(self, query: str) -> Optional[str]:
-        """Send query to Grok-4 with MCP tools and handle tool calling."""
+        """Send query to Grok-4 with function tools, execute via MCP."""
         try:
             import aiohttp
             
@@ -227,23 +233,29 @@ Announce when you're using tools so the user knows what's happening."""
             
             async with aiohttp.ClientSession() as session:
                 # Multi-turn loop to handle tool calls
-                max_iterations = 10
+                max_iterations = 5
                 for iteration in range(max_iterations):
+                    # Build request payload with function tools
+                    payload = {
+                        "model": self.model,
+                        "messages": messages,
+                        "tools": self.tools  # Use hardcoded function tools
+                    }
+                    
+                    print(f"   📡 Calling Grok API (iteration {iteration + 1})...")
+                    
                     async with session.post(
                         "https://api.x.ai/v1/chat/completions",
                         headers={
                             "Authorization": f"Bearer {self.api_key}",
                             "Content-Type": "application/json"
                         },
-                        json={
-                            "model": self.model,
-                            "messages": messages,
-                            "mcp": {"servers": [{"type": "url", "url": self.mcp_server}]}
-                        }
+                        json=payload
                     ) as resp:
                         if resp.status != 200:
                             error = await resp.text()
-                            log.error("grok.error", status=resp.status, error=error[:200])
+                            log.error("grok.error", status=resp.status, error=error[:300])
+                            print(f"   ❌ API Error ({resp.status}): {error[:200]}")
                             return f"Error: {resp.status}"
                         
                         data = await resp.json()
@@ -255,31 +267,50 @@ Announce when you're using tools so the user knows what's happening."""
                         tool_calls = message.get("tool_calls", [])
                         
                         if tool_calls:
-                            # Display tool usage
-                            for tool_call in tool_calls:
-                                tool_name = tool_call.get("function", {}).get("name", "unknown")
-                                tool_args = tool_call.get("function", {}).get("arguments", "{}")
-                                print(f"   🔧 Tool: {tool_name}")
-                                # Truncate long args
-                                if len(tool_args) > 100:
-                                    print(f"      Args: {tool_args[:100]}...")
-                                else:
-                                    print(f"      Args: {tool_args}")
-                            
-                            # Add assistant message with tool calls to conversation
+                            # Add assistant message with tool calls
                             messages.append(message)
                             
-                            # The MCP server handles tool execution and returns results
-                            # We continue the loop to get the final response
+                            # Execute each tool via MCP
+                            for tool_call in tool_calls:
+                                tool_id = tool_call.get("id", "")
+                                tool_name = tool_call.get("function", {}).get("name", "unknown")
+                                tool_args_str = tool_call.get("function", {}).get("arguments", "{}")
+                                
+                                print(f"   🔧 Tool: {tool_name}")
+                                try:
+                                    tool_args = json.loads(tool_args_str)
+                                except:
+                                    tool_args = {}
+                                
+                                if tool_args:
+                                    print(f"      Args: {json.dumps(tool_args)[:80]}")
+                                
+                                # Execute tool via MCP
+                                print(f"      ⏳ Executing via MCP...")
+                                tool_result = await self.mcp_client.call_tool(tool_name, tool_args)
+                                
+                                # Format result
+                                if isinstance(tool_result, dict) and "error" in tool_result:
+                                    result_str = f"Error: {tool_result['error']}"
+                                elif isinstance(tool_result, dict):
+                                    result_str = json.dumps(tool_result)
+                                else:
+                                    result_str = str(tool_result)
+                                
+                                print(f"      ✅ Result: {result_str[:100]}...")
+                                
+                                # Add tool result to messages
+                                messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": tool_id,
+                                    "content": result_str
+                                })
+                            
+                            # Continue to get final response
                             continue
                         
                         # No tool calls - return the content
                         content = message.get("content", "")
-                        
-                        # Handle thinking/reasoning if present
-                        if message.get("reasoning_content"):
-                            print(f"   💭 Reasoning: {message['reasoning_content'][:100]}...")
-                        
                         return content if content else "No response"
                 
                 return "Max tool iterations reached"
