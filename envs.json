@@ -7,6 +7,14 @@
       "description": "Todo list Project",
       "active_prs": [{"pr_num": 1, "branch_name": "new_features"}],
       "github_repo": "hackgt1332/test_repo"
+    },
+    "vllm-omni": {
+      "name": "vllm-omni",
+      "path": "/home/green/code/vllm-omni",
+      "run_script": "bash run.sh",
+      "description": "vllm-omni multimodal llm infrence engine",
+      "active_prs": [{"pr_num": 1, "branch_name": "new_features"}],
+      "github_repo": "vllm-project/vllm-omni"
     }
   },
   "current_env": ""

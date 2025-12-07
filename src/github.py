@@ -230,7 +230,7 @@ def respond_to_pr_comment(repo: str, pr_number: int, comment_id: int, body: str)
         repository = g.get_repo(f"{owner}/{repo_name}")
         pr = repository.get_pull(pr_number)
 
-        # Get the review comment by ID
+        # Get the review comment by ID to verify it exists
         comment = None
         for review_comment in pr.get_review_comments():
             if review_comment.id == comment_id:
@@ -240,8 +240,8 @@ def respond_to_pr_comment(repo: str, pr_number: int, comment_id: int, body: str)
         if not comment:
             raise ValueError(f"Comment with ID {comment_id} not found in PR #{pr_number}")
 
-        # Create reply
-        reply = comment.create_reply(body)
+        # Create reply using the PR's method
+        reply = pr.create_review_comment_reply(comment_id, body)
 
         # Return the reply information
         reply_info = {
