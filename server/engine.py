@@ -233,7 +233,7 @@ class Engine:
     async def ask_claude(self, query: str, working_dir: str = ".") -> str:
         """Query Claude coding agent."""
         try:
-            from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions, ResultMessage
+            from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions, ResultMessage, AssistantMessage
         except ImportError:
             return "Error: claude_agent_sdk not installed. Run: pip install claude-agent-sdk"
         
@@ -247,13 +247,12 @@ class Engine:
                 
                 response = None
                 async for message in client.receive_messages():
-                    if hasattr(message, 'message') and hasattr(message.message, 'content'):
-                        content = message.message.content
-                        if isinstance(content, list):
-                            texts = [b.text for b in content if hasattr(b, 'text')]
-                            if texts:
-                                response = ' '.join(texts)
-                                break
+                    # AssistantMessage has .content directly
+                    if isinstance(message, AssistantMessage) and message.content:
+                        texts = [b.text for b in message.content if hasattr(b, 'text')]
+                        if texts:
+                            response = ' '.join(texts)
+                    
                     if isinstance(message, ResultMessage):
                         break
                 
