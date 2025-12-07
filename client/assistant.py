@@ -33,8 +33,8 @@ class VoiceAssistant:
         
         # Use config for default URL
         if mcp_server is None:
-            from src.config import settings
-            mcp_server = settings.client_mcp_url
+            from server.config import settings
+            mcp_server = settings.mcp_endpoint
         
         self.mcp_client = MCPClient(mcp_server)
         self.audio = AudioCapture()

@@ -36,9 +36,10 @@ def start(
     
     # Get URL from settings if not provided
     if mcp_server is None:
-        from src.config import settings
-        mcp_server = settings.client_mcp_url
-        base_url, mcp_url = settings.client_display_urls
+        from server.config import settings
+        mcp_server = settings.mcp_endpoint
+        base_url = settings.server_url
+        mcp_url = settings.mcp_endpoint
     else:
         base_url = mcp_server.replace("/mcp", "")
         mcp_url = mcp_server
