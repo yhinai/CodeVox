@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     HOST: str = "127.0.0.1"
     PORT: int = 6030
     
+    # Optional override
+    MCP_BASE_URL: Optional[str] = None
+    
     # Discovery - Comma-separated paths to scan
     SEARCH_PATHS: str = "~/code,~/projects,~/dev"
     
@@ -26,16 +29,20 @@ class Settings(BaseSettings):
     
     @property
     def mcp_endpoint(self) -> str:
+        if self.MCP_BASE_URL:
+            return f"{self.MCP_BASE_URL.rstrip('/')}/mcp"
         return f"http://{self.HOST}:{self.PORT}/mcp"
     
     @property 
     def server_url(self) -> str:
+        if self.MCP_BASE_URL:
+            return self.MCP_BASE_URL.rstrip('/')
         return f"http://{self.HOST}:{self.PORT}"
 
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
-        extra = "ignore"  # Ignore extra env vars like old MCP_BASE_URL
+        extra = "ignore"
 
 
 settings = Settings()

@@ -364,22 +364,49 @@ class Engine:
     # =========================================================================
     
     async def ask_claude(self, query: str, working_dir: str = ".") -> str:
-        """Query Claude coding agent."""
+        """Query Claude coding agent with session persistence and bypass permissions."""
         try:
-            from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions, ResultMessage, AssistantMessage
+            from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions, ResultMessage, AssistantMessage, SystemMessage
         except ImportError:
             return "Error: claude_agent_sdk not installed"
         
         log.info("claude.ask", query=query[:100])
         
+        # Session file path
+        cwd = os.path.expanduser(working_dir)
+        session_file = os.path.join(cwd, ".claude_session")
+        session_id = None
+        
+        # Try to load existing session
+        if os.path.exists(session_file):
+            try:
+                with open(session_file, "r") as f:
+                    session_id = f.read().strip()
+                log.info("claude.resume", session_id=session_id)
+            except Exception:
+                log.warning("claude.session_read_failed")
+
         try:
-            options = ClaudeAgentOptions(cwd=os.path.expanduser(working_dir))
+            # Configure options with bypass permissions and session resumption
+            options = ClaudeAgentOptions(
+                cwd=cwd,
+                permission_mode="bypassPermissions",
+                resume=session_id if session_id else None
+            )
             
             async with ClaudeSDKClient(options) as client:
                 await client.query(query)
                 
                 response = None
+                new_session_id = None
+                
                 async for message in client.receive_messages():
+                    # Capture session ID from initial system message or result
+                    if isinstance(message, (SystemMessage, ResultMessage)):
+                         # Check if message has session_id attribute
+                         if hasattr(message, "session_id") and message.session_id:
+                             new_session_id = message.session_id
+                    
                     if isinstance(message, AssistantMessage) and message.content:
                         texts = [b.text for b in message.content if hasattr(b, 'text')]
                         if texts:
@@ -387,6 +414,15 @@ class Engine:
                     
                     if isinstance(message, ResultMessage):
                         break
+                
+                # Persist session ID if we got one and it's new or different
+                if new_session_id and new_session_id != session_id:
+                     try:
+                         with open(session_file, "w") as f:
+                             f.write(new_session_id)
+                         log.info("claude.session_saved", session_id=new_session_id)
+                     except Exception as e:
+                         log.warning("claude.session_save_failed", error=str(e))
                 
                 return response or "No response from Claude"
                 

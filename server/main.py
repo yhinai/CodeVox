@@ -80,6 +80,7 @@ async def stop_process(pid: int) -> str:
     return await engine.stop_process(pid)
 
 
+
 # =============================================================================
 # GITHUB TOOLS
 # =============================================================================
@@ -101,6 +102,48 @@ async def github_api(method: str, endpoint: str, payload: str = "{}") -> str:
     
     result = await engine.call_github(method, endpoint, data, settings.GH_TOKEN)
     return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def fetch_pr_comments(repo: str, pr_number: int, include_outdated: bool = False) -> str:
+    """
+    Fetch all review and issue comments for a PR.
+    repo: 'owner/repo'
+    """
+    try:
+        from . import github_integration
+        result = github_integration.fetch_pr_comments(repo, pr_number, include_outdated)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
+def fetch_pr_info(repo: str, pr_number: int) -> str:
+    """
+    Fetch metadata for a PR (title, body, state, comments, etc).
+    repo: 'owner/repo'
+    """
+    try:
+        from . import github_integration
+        result = github_integration.fetch_pr_info(repo, pr_number)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
+def respond_pr_comment(repo: str, pr_number: int, comment_id: int, body: str) -> str:
+    """
+    Respond to a specific PR review comment.
+    repo: 'owner/repo'
+    """
+    try:
+        from . import github_integration
+        result = github_integration.respond_to_pr_comment(repo, pr_number, comment_id, body)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 
 # =============================================================================
