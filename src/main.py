@@ -1,3 +1,8 @@
+# Suppress websockets deprecation warnings (from uvicorn dependency) - must be before uvicorn import
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="websockets")
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="uvicorn")
+
 """
 Claude Code MCP Server - Lean & Elegant
 FastMCP server exposing Claude Code tools at http://localhost:6030
@@ -296,7 +301,8 @@ def main():
         mcp.http_app(),
         host=settings.MCP_HOST,
         port=settings.MCP_PORT,
-        log_level="warning"
+        log_level="warning",
+        ws="wsproto"  # Use wsproto instead of websockets to avoid deprecation warnings
     )
 
 

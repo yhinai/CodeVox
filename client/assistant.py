@@ -23,7 +23,7 @@ class VoiceAssistant:
         mode: str = "voice",
         voice: str = "ara",
         model: str = "grok-4-1-fast",
-        mcp_server: str = "https://dex-mcp.tunn.dev/mcp"
+        mcp_server: str = "http://127.0.0.1:6030/mcp"
     ):
         self.mode = mode
         self.voice = voice
