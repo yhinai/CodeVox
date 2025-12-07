@@ -1,6 +1,6 @@
 {
   "environments": {
-    "default": {
+    "foo": {
       "name": "Todo env",
       "path": "/home/green/code/claudia/test_repo",
       "run_script": "bash run.sh",
@@ -16,8 +16,6 @@
       "active_prs": [{"pr_num": 1, "branch_name": "new_features"}],
       "github_repo": "vllm-project/vllm-omni"
     }
-
   },
-  
   "current_env": ""
 }

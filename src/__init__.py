@@ -1,23 +1,21 @@
-"""Claude Code MCP Server - Modular Architecture"""
+"""Claude Code MCP Server - Lean Edition"""
 
-from .environment import load_envs, get_redis, clear_redis
-from .github import fetch_pr_comments, fetch_pr_info
+from .environment import load_envs, get_current_environment, set_current_environment
+from .github import fetch_pr_comments, fetch_pr_info, respond_to_pr_comment
 from .process import start_process, stop_process, list_all_processes
-from .discord_client import init_discord_client, send_to_discord
-from .claude import ask_claude_async, get_claude_status, get_claude_messages
+from .claude import ask_claude_async, ClaudeSession, get_default_session
 
 __all__ = [
     'load_envs',
-    'get_redis',
-    'clear_redis',
+    'get_current_environment',
+    'set_current_environment',
     'fetch_pr_comments',
     'fetch_pr_info',
+    'respond_to_pr_comment',
     'start_process',
     'stop_process',
     'list_all_processes',
-    'init_discord_client',
-    'send_to_discord',
     'ask_claude_async',
-    'get_claude_status',
-    'get_claude_messages',
+    'ClaudeSession',
+    'get_default_session',
 ]
