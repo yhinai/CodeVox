@@ -34,6 +34,13 @@ class VoiceAssistant:
         self.sample_rate = 24000
         self.chunk_size = 1024
         
+        # Conversation history for multi-turn context
+        self.conversation_history = []
+        self.system_prompt = """You are a helpful voice assistant with access to MCP (Model Context Protocol) tools.
+When the user asks you to perform coding tasks, use the available MCP tools.
+Be concise in responses since they will be spoken aloud.
+Announce when you're using tools so the user knows what's happening."""
+        
         if not self.api_key:
             raise ValueError("XAI_API_KEY environment variable not set")
     
@@ -78,6 +85,12 @@ class VoiceAssistant:
                 else:
                     print(f"\n💬 Response:\n{response}\n")
                     await self._speak(response)
+                
+                # Add to conversation history (keep last 10 turns)
+                self.conversation_history.append({"role": "user", "content": user_input})
+                self.conversation_history.append({"role": "assistant", "content": response})
+                if len(self.conversation_history) > 20:
+                    self.conversation_history = self.conversation_history[-20:]
                 
             except KeyboardInterrupt:
                 print("\n⚠️ Interrupted")
@@ -203,30 +216,73 @@ class VoiceAssistant:
             return None
     
     async def _ask_grok(self, query: str) -> Optional[str]:
-        """Send query to Grok-4 with MCP tools."""
+        """Send query to Grok-4 with MCP tools and handle tool calling."""
         try:
             import aiohttp
             
+            # Build messages with history
+            messages = [{"role": "system", "content": self.system_prompt}]
+            messages.extend(self.conversation_history)
+            messages.append({"role": "user", "content": query})
+            
             async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    "https://api.x.ai/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": self.model,
-                        "messages": [{"role": "user", "content": query}],
-                        "mcp": {"servers": [{"type": "url", "url": self.mcp_server}]}
-                    }
-                ) as resp:
-                    if resp.status != 200:
-                        error = await resp.text()
-                        log.error("grok.error", status=resp.status, error=error)
-                        return f"Error: {resp.status}"
-                    
-                    data = await resp.json()
-                    return data.get("choices", [{}])[0].get("message", {}).get("content")
+                # Multi-turn loop to handle tool calls
+                max_iterations = 10
+                for iteration in range(max_iterations):
+                    async with session.post(
+                        "https://api.x.ai/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {self.api_key}",
+                            "Content-Type": "application/json"
+                        },
+                        json={
+                            "model": self.model,
+                            "messages": messages,
+                            "mcp": {"servers": [{"type": "url", "url": self.mcp_server}]}
+                        }
+                    ) as resp:
+                        if resp.status != 200:
+                            error = await resp.text()
+                            log.error("grok.error", status=resp.status, error=error[:200])
+                            return f"Error: {resp.status}"
+                        
+                        data = await resp.json()
+                        choice = data.get("choices", [{}])[0]
+                        message = choice.get("message", {})
+                        finish_reason = choice.get("finish_reason", "")
+                        
+                        # Check for tool calls
+                        tool_calls = message.get("tool_calls", [])
+                        
+                        if tool_calls:
+                            # Display tool usage
+                            for tool_call in tool_calls:
+                                tool_name = tool_call.get("function", {}).get("name", "unknown")
+                                tool_args = tool_call.get("function", {}).get("arguments", "{}")
+                                print(f"   🔧 Tool: {tool_name}")
+                                # Truncate long args
+                                if len(tool_args) > 100:
+                                    print(f"      Args: {tool_args[:100]}...")
+                                else:
+                                    print(f"      Args: {tool_args}")
+                            
+                            # Add assistant message with tool calls to conversation
+                            messages.append(message)
+                            
+                            # The MCP server handles tool execution and returns results
+                            # We continue the loop to get the final response
+                            continue
+                        
+                        # No tool calls - return the content
+                        content = message.get("content", "")
+                        
+                        # Handle thinking/reasoning if present
+                        if message.get("reasoning_content"):
+                            print(f"   💭 Reasoning: {message['reasoning_content'][:100]}...")
+                        
+                        return content if content else "No response"
+                
+                return "Max tool iterations reached"
                     
         except Exception as e:
             log.error("grok.error", error=str(e))
@@ -236,9 +292,14 @@ class VoiceAssistant:
         """Convert text to speech and play using REST API."""
         try:
             import aiohttp
-            import pyaudio
+            import subprocess
+            import tempfile
+            import os
             
             print("   🔊 Generating speech...")
+            
+            # Use proper voice name capitalization
+            voice_name = self.voice.capitalize()
             
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -248,33 +309,31 @@ class VoiceAssistant:
                         "Content-Type": "application/json"
                     },
                     json={
-                        "model": "grok-2-vision-1212",
                         "input": text,
-                        "voice": self.voice,
-                        "response_format": "wav"
+                        "voice": voice_name,
+                        "response_format": "mp3"
                     }
                 ) as resp:
                     if resp.status == 200:
                         audio_data = await resp.read()
                         print(f"   ✅ Got {len(audio_data)} bytes of audio")
                         
-                        # Play audio (skip WAV header - first 44 bytes)
-                        p = pyaudio.PyAudio()
-                        stream = p.open(
-                            format=pyaudio.paInt16,
-                            channels=1,
-                            rate=self.sample_rate,
-                            output=True
-                        )
-                        stream.write(audio_data[44:])  # Skip WAV header
-                        stream.stop_stream()
-                        stream.close()
-                        p.terminate()
+                        # Save to temp file and play with afplay (macOS)
+                        with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
+                            f.write(audio_data)
+                            temp_path = f.name
+                        
+                        try:
+                            # Use afplay on macOS for reliable MP3 playback
+                            subprocess.run(['afplay', temp_path], check=True)
+                        finally:
+                            os.unlink(temp_path)
                     else:
                         error = await resp.text()
-                        print(f"   ⚠️ TTS Error ({resp.status}): {error[:100]}")
+                        print(f"   ⚠️ TTS Error ({resp.status}): {error[:200]}")
                 
         except Exception as e:
             log.error("tts.error", error=str(e))
             print(f"⚠️ TTS Error: {e}")
+
 
