@@ -1,68 +1,65 @@
-"""Voice Assistant - Core logic (refactored from voice_client/voice_assistant.py)"""
-
+"""
+Voice Assistant - Clean architecture with dynamic tool discovery.
+Uses AudioCapture for VAD and MCPClient for dynamic tools.
+"""
 import asyncio
 import json
 import os
-import base64
 from typing import Optional, List, Dict
 import structlog
 from dotenv import load_dotenv
-from .mcp_client import MCPClient, CLAUDE_CODE_MCP_TOOLS
 
-# Add parent directory to path for imports
-import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.config import settings
+from .mcp_client import MCPClient
+from .audio import AudioCapture
 
-# Load .env file
 load_dotenv()
-
 log = structlog.get_logger()
 
 
 class VoiceAssistant:
-    """Voice assistant that integrates STT, TTS, and Grok-4 with MCP."""
+    """Voice assistant with STT, TTS, and dynamic MCP tool execution."""
     
     def __init__(
         self,
         mode: str = "voice",
         voice: str = "ara",
         model: str = "grok-4-1-fast",
-        mcp_server: str = None  # Will use settings.client_mcp_url if None
+        mcp_server: str = None
     ):
         self.mode = mode
         self.voice = voice
         self.model = model
-        # Use settings-based URL if not provided
-        self.mcp_server = mcp_server if mcp_server else settings.client_mcp_url
         self.api_key = os.getenv("XAI_API_KEY", "")
         
-        # Audio settings
-        self.sample_rate = 24000
-        self.chunk_size = 1024
+        # Use config for default URL
+        if mcp_server is None:
+            from src.config import settings
+            mcp_server = settings.client_mcp_url
         
-        # Conversation history for multi-turn context
+        self.mcp_client = MCPClient(mcp_server)
+        self.audio = AudioCapture()
+        self.tools: List[Dict] = []
         self.conversation_history: List[Dict] = []
         
-        # MCP client for tool execution  
-        self.mcp_client = MCPClient(mcp_server)
-        self.tools = CLAUDE_CODE_MCP_TOOLS  # Use hardcoded tools
-        
         self.system_prompt = """You are a helpful voice assistant with access to coding tools.
-When the user asks you to perform tasks like listing environments, checking status, or running commands, use the available function tools.
-Be concise in responses since they will be spoken aloud.
-When you use a tool, wait for the result before providing your response."""
+When the user asks you to perform tasks, use the available function tools.
+Be concise since responses will be spoken aloud."""
         
         if not self.api_key:
             raise ValueError("XAI_API_KEY environment variable not set")
     
     def run(self):
-        """Run the voice assistant conversation loop."""
-        asyncio.run(self._conversation_loop())
+        """Run the assistant."""
+        asyncio.run(self._main_loop())
     
-    async def _conversation_loop(self):
+    async def _main_loop(self):
         """Main conversation loop."""
-        print("\n🎙️ Assistant Ready! Say 'exit' or 'quit' to stop.\n")
+        # Discover tools dynamically
+        print("🔌 Connecting to MCP Server...")
+        self.tools = await self.mcp_client.get_adaptable_tools()
+        print(f"⚡ Loaded {len(self.tools)} tools dynamically\n")
+        
+        print("🎙️ Assistant Ready! Say 'exit' or 'quit' to stop.\n")
         
         while True:
             try:
@@ -76,14 +73,13 @@ When you use a tool, wait for the result before providing your response."""
                     print("⚠️  No input detected, try again")
                     continue
                 
-                # Check for exit
                 if user_input.lower() in ["exit", "quit", "bye", "goodbye"]:
                     print("👋 Goodbye!")
                     break
                 
                 print(f"✅ You said: {user_input}\n")
                 
-                # Get response from Grok
+                # Get response
                 print("🤔 Thinking...")
                 response = await self._ask_grok(user_input)
                 
@@ -91,14 +87,12 @@ When you use a tool, wait for the result before providing your response."""
                     print("❌ No response received")
                     continue
                 
-                # Output response
-                if self.mode in ["text-only", "no-tts"]:
-                    print(f"\n💬 Response:\n{response}\n")
-                else:
-                    print(f"\n💬 Response:\n{response}\n")
+                # Output
+                print(f"\n💬 Response:\n{response}\n")
+                if self.mode not in ["text-only", "no-tts"]:
                     await self._speak(response)
                 
-                # Add to conversation history (keep last 10 turns)
+                # Update history
                 self.conversation_history.append({"role": "user", "content": user_input})
                 self.conversation_history.append({"role": "assistant", "content": response})
                 if len(self.conversation_history) > 20:
@@ -108,35 +102,22 @@ When you use a tool, wait for the result before providing your response."""
                 print("\n⚠️ Interrupted")
                 break
             except Exception as e:
-                log.error("conversation.error", error=str(e))
+                log.error("assistant.error", error=str(e))
                 print(f"❌ Error: {e}")
     
     async def _listen(self) -> Optional[str]:
-        """Capture audio and transcribe using STT."""
-        try:
-            import pyaudio
-            import websockets
-        except ImportError as e:
-            print(f"❌ Missing dependency: {e}")
-            return input("💬 Type instead: ").strip()
-        
-        print("🎤 Listening... (Speak now)")
-        
-        # Capture audio
-        audio_data = self._capture_audio()
+        """Capture and transcribe audio."""
+        audio_data = self.audio.capture()
         if not audio_data:
             return None
         
-        # Send to STT via REST API
         try:
             import aiohttp
             
             print("   Sending to STT...")
-            
-            # Create form data with audio file
             form_data = aiohttp.FormData()
             form_data.add_field('file', audio_data, filename='audio.wav', content_type='audio/wav')
-            form_data.add_field('model', 'grok-2-vision-1212')  # STT model
+            form_data.add_field('model', 'grok-2-vision-1212')
             
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -146,132 +127,30 @@ When you use a tool, wait for the result before providing your response."""
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        print(f"   STT Response: {data}")
-                        text = data.get("text", "")
-                        return text if text else None
+                        return data.get("text", "") or None
                     else:
-                        error_text = await resp.text()
-                        print(f"   STT Error ({resp.status}): {error_text[:200]}")
+                        print(f"   STT Error: {resp.status}")
                         return input("💬 Type instead: ").strip()
-                
+                        
         except Exception as e:
             log.error("stt.error", error=str(e))
-            print(f"❌ STT Error: {e}")
             return input("💬 Type instead: ").strip()
     
-    def _capture_audio(self) -> Optional[bytes]:
-        """Capture audio with dynamic silence detection (VAD)."""
-        try:
-            import pyaudio
-            import wave
-            import io
-            import struct
-            import math
-            
-            p = pyaudio.PyAudio()
-            
-            stream = p.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=self.sample_rate,
-                input=True,
-                frames_per_buffer=self.chunk_size
-            )
-            
-            print("🎤 Listening... (Speak now) ", end="", flush=True)
-            
-            frames = []
-            silent_chunks = 0
-            has_spoken = False
-            
-            # Dynamic Recording Constants
-            CHUNKS_PER_SECOND = self.sample_rate / self.chunk_size
-            MAX_SILENCE_CHUNKS = int(1.5 * CHUNKS_PER_SECOND)  # 1.5s silence to stop
-            MAX_TOTAL_CHUNKS = int(30.0 * CHUNKS_PER_SECOND)   # 30s max recording
-            INITIAL_TIMEOUT_CHUNKS = int(5.0 * CHUNKS_PER_SECOND)  # 5s initial timeout
-            
-            # Fixed threshold that works reliably - speech is typically 1000-5000+ RMS
-            SILENCE_THRESHOLD = 800
-            
-            while len(frames) < MAX_TOTAL_CHUNKS:
-                data = stream.read(self.chunk_size, exception_on_overflow=False)
-                frames.append(data)
-                
-                # Calculate audio level (RMS)
-                samples = struct.unpack(f'{len(data)//2}h', data)
-                rms = math.sqrt(sum(s**2 for s in samples) / len(samples)) if samples else 0
-                
-                # Visual feedback bar (adjust scale for visibility)
-                level = min(int(rms / 500), 10)  # Scale to show activity
-                bar = "█" * level + "░" * (10 - level)
-                
-                # Check if this chunk has speech
-                is_speech = rms > SILENCE_THRESHOLD
-                
-                if is_speech:
-                    has_spoken = True
-                    silent_chunks = 0
-                    status = "Speaking"
-                else:
-                    silent_chunks += 1
-                    status = "Silent" if has_spoken else "Waiting"
-                
-                print(f"\r🎤 {status}: [{bar}] {len(frames) / CHUNKS_PER_SECOND:.1f}s ", end="", flush=True)
-                
-                # Stop if silence persists AFTER speech has started
-                if has_spoken and silent_chunks > MAX_SILENCE_CHUNKS:
-                    print("✓ (Done)")
-                    break
-                
-                # Stop if no speech detected initially (timeout after 5s)
-                if not has_spoken and len(frames) > INITIAL_TIMEOUT_CHUNKS:
-                    print("× (Timeout)")
-                    break
-            
-            stream.stop_stream()
-            stream.close()
-            p.terminate()
-            
-            # If we didn't detect meaningful speech, return None
-            if not has_spoken:
-                return None
-            
-            # Convert to WAV
-            buffer = io.BytesIO()
-            with wave.open(buffer, 'wb') as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(self.sample_rate)
-                wf.writeframes(b''.join(frames))
-            
-            audio_bytes = buffer.getvalue()
-            print(f"   Captured {len(audio_bytes)} bytes ({len(frames) / CHUNKS_PER_SECOND:.1f}s)")
-            return audio_bytes
-            
-        except Exception as e:
-            log.error("audio.capture.error", error=str(e))
-            print(f"\n   ❌ Audio capture error: {e}")
-            return None
-    
     async def _ask_grok(self, query: str) -> Optional[str]:
-        """Send query to Grok-4 with function tools, execute via MCP."""
+        """Query Grok with dynamic tool execution."""
         try:
             import aiohttp
             
-            # Build messages with history
             messages = [{"role": "system", "content": self.system_prompt}]
             messages.extend(self.conversation_history)
             messages.append({"role": "user", "content": query})
             
             async with aiohttp.ClientSession() as session:
-                # Multi-turn loop to handle tool calls
-                max_iterations = 5
-                for iteration in range(max_iterations):
-                    # Build request payload with function tools
+                for iteration in range(5):
                     payload = {
                         "model": self.model,
                         "messages": messages,
-                        "tools": self.tools  # Use hardcoded function tools
+                        "tools": self.tools
                     }
                     
                     print(f"   📡 Calling Grok API (iteration {iteration + 1})...")
@@ -286,26 +165,18 @@ When you use a tool, wait for the result before providing your response."""
                     ) as resp:
                         if resp.status != 200:
                             error = await resp.text()
-                            log.error("grok.error", status=resp.status, error=error[:300])
-                            print(f"   ❌ API Error ({resp.status}): {error[:200]}")
                             return f"Error: {resp.status}"
                         
                         data = await resp.json()
                         choice = data.get("choices", [{}])[0]
                         message = choice.get("message", {})
-                        finish_reason = choice.get("finish_reason", "")
-                        
-                        # Check for tool calls
                         tool_calls = message.get("tool_calls", [])
                         
                         if tool_calls:
-                            # Add assistant message with tool calls
                             messages.append(message)
                             
-                            # Execute each tool via MCP
                             for tool_call in tool_calls:
-                                tool_id = tool_call.get("id", "")
-                                tool_name = tool_call.get("function", {}).get("name", "unknown")
+                                tool_name = tool_call.get("function", {}).get("name", "")
                                 tool_args_str = tool_call.get("function", {}).get("arguments", "{}")
                                 
                                 print(f"   🔧 Tool: {tool_name}")
@@ -314,55 +185,34 @@ When you use a tool, wait for the result before providing your response."""
                                 except:
                                     tool_args = {}
                                 
-                                if tool_args:
-                                    print(f"      Args: {json.dumps(tool_args)[:80]}")
-                                
-                                # Execute tool via MCP
-                                print(f"      ⏳ Executing via MCP...")
-                                tool_result = await self.mcp_client.call_tool(tool_name, tool_args)
-                                
-                                # Format result
-                                if isinstance(tool_result, dict) and "error" in tool_result:
-                                    result_str = f"Error: {tool_result['error']}"
-                                elif isinstance(tool_result, dict):
-                                    result_str = json.dumps(tool_result)
-                                else:
-                                    result_str = str(tool_result)
+                                result = await self.mcp_client.call_tool(tool_name, tool_args)
+                                result_str = json.dumps(result) if isinstance(result, dict) else str(result)
                                 
                                 print(f"      ✅ Result: {result_str[:100]}...")
                                 
-                                # Add tool result to messages
                                 messages.append({
                                     "role": "tool",
-                                    "tool_call_id": tool_id,
+                                    "tool_call_id": tool_call.get("id", ""),
                                     "content": result_str
                                 })
-                            
-                            # Continue to get final response
                             continue
                         
-                        # No tool calls - return the content
-                        content = message.get("content", "")
-                        return content if content else "No response"
+                        return message.get("content", "No response")
                 
-                return "Max tool iterations reached"
-                    
+                return "Max iterations reached"
+                
         except Exception as e:
             log.error("grok.error", error=str(e))
             return f"Error: {e}"
     
     async def _speak(self, text: str):
-        """Convert text to speech and play using REST API."""
+        """Text to speech."""
         try:
             import aiohttp
             import subprocess
             import tempfile
-            import os
             
             print("   🔊 Generating speech...")
-            
-            # Use proper voice name capitalization
-            voice_name = self.voice.capitalize()
             
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -373,30 +223,22 @@ When you use a tool, wait for the result before providing your response."""
                     },
                     json={
                         "input": text,
-                        "voice": voice_name,
+                        "voice": self.voice.capitalize(),
                         "response_format": "mp3"
                     }
                 ) as resp:
                     if resp.status == 200:
-                        audio_data = await resp.read()
-                        print(f"   ✅ Got {len(audio_data)} bytes of audio")
-                        
-                        # Save to temp file and play with afplay (macOS)
+                        audio = await resp.read()
                         with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
-                            f.write(audio_data)
+                            f.write(audio)
                             temp_path = f.name
                         
                         try:
-                            # Use afplay on macOS for reliable MP3 playback
                             subprocess.run(['afplay', temp_path], check=True)
                         finally:
                             os.unlink(temp_path)
                     else:
-                        error = await resp.text()
-                        print(f"   ⚠️ TTS Error ({resp.status}): {error[:200]}")
-                
+                        print(f"   ⚠️ TTS Error: {resp.status}")
+                        
         except Exception as e:
             log.error("tts.error", error=str(e))
-            print(f"⚠️ TTS Error: {e}")
-
-

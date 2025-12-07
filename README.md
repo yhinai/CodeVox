@@ -1,6 +1,6 @@
 # Claude Code MCP
 
-A lightweight MCP (Model Context Protocol) server that exposes Claude Code tools via HTTP, with an integrated voice assistant powered by Grok-4.
+A lightweight MCP server exposing Claude Code tools via HTTP, with an integrated voice assistant powered by Grok-4.
 
 ## Architecture
 
@@ -8,33 +8,32 @@ A lightweight MCP (Model Context Protocol) server that exposes Claude Code tools
 flowchart TB
     subgraph Client["Voice Client"]
         CLI["Typer CLI"]
-        VA["VoiceAssistant<br/>STT + TTS + Grok-4"]
-        MCP_C["FastMCP Client"]
+        VA["VoiceAssistant"]
+        MCP_C["MCPClient<br/>(Dynamic Discovery)"]
+        AUD["AudioCapture<br/>(VAD)"]
     end
 
     subgraph Server["MCP Server"]
-        FMCP["FastMCP<br/>HTTP + SSE"]
-        subgraph Tools["MCP Tools"]
-            T1["Coding Tools"]
-            T2["Process Management"]
-            T3["Environment Management"]
-            T4["GitHub Integration"]
+        FMCP["FastMCP"]
+        subgraph Managers["Singleton Managers"]
+            PM["ProcessManager"]
+            EM["EnvironmentManager"]
         end
-    end
-
-    subgraph External["External Services"]
-        XAI["xAI API"]
-        CLAUDE["Claude Agent SDK"]
-        GITHUB["GitHub API"]
+        subgraph Tools["12 Tools"]
+            T1["Coding"]
+            T2["Process"]
+            T3["Environment"]
+            T4["GitHub"]
+        end
     end
 
     CLI --> VA
     VA --> MCP_C
-    VA --> XAI
-    MCP_C -->|"HTTP/SSE"| FMCP
+    VA --> AUD
+    MCP_C -->|"Dynamic Discovery"| FMCP
     FMCP --> Tools
-    T1 --> CLAUDE
-    T4 --> GITHUB
+    T2 --> PM
+    T3 --> EM
 ```
 
 ## Quick Start
@@ -43,11 +42,13 @@ flowchart TB
 # Install
 pip install -e .
 
-# Start the server
-./run.sh server
+# Start server
+mcp-server
+# or: ./run.sh server
 
-# Start the voice client
-./run.sh client
+# Start client
+voice start
+# or: ./run.sh client
 ```
 
 ## Project Structure
@@ -55,93 +56,76 @@ pip install -e .
 ```
 claude-code-mcp/
 ├── src/                      # MCP Server
-│   ├── main.py               # FastMCP entry point
-│   ├── config.py             # Configuration management
-│   ├── claude.py             # Claude SDK integration
-│   ├── environment.py        # Environment management
-│   ├── github.py             # GitHub API integration
-│   └── process.py            # Process management
+│   ├── main.py               # Entry point (modular tool registration)
+│   ├── config.py             # Pydantic settings
+│   ├── claude.py             # ClaudeSession (SDK wrapper)
+│   ├── environment.py        # EnvironmentManager singleton
+│   ├── process.py            # ProcessManager singleton
+│   └── github.py             # GitHub API integration
 │
 ├── client/                   # Voice Assistant
-│   ├── main.py               # CLI entry point
-│   ├── assistant.py          # VoiceAssistant class
-│   └── mcp_client.py         # MCP client wrapper
+│   ├── main.py               # Typer CLI
+│   ├── assistant.py          # VoiceAssistant (dynamic tools)
+│   ├── mcp_client.py         # Dynamic tool discovery
+│   └── audio.py              # AudioCapture with VAD
 │
-├── run.sh                    # Run script
+├── pyproject.toml            # Dependencies & entry points
 ├── envs.json                 # Project environments
-└── .env                      # Environment variables
+└── .env                      # Configuration
 ```
 
 ## MCP Tools
 
 | Category | Tool | Description |
 |----------|------|-------------|
-| **Coding** | `ask_coder` | Send query to Claude Code |
+| **Coding** | `ask_coder` | Query Claude Code agent |
 | | `get_status` | Check agent status |
 | | `pop_messages` | Get execution messages |
-| **Environment** | `list_environments` | List configured projects |
+| **Environment** | `list_environments` | List projects |
 | | `get_current_env` | Get active environment |
-| | `switch_environment` | Switch project context |
+| | `switch_environment` | Switch context |
+| | `create_environment` | Create new project config |
 | **Process** | `run_cmd` | Start background process |
-| | `stop_cmd` | Stop process by PID |
-| | `restart_cmd` | Restart a process |
+| | `stop_cmd` | Stop by PID |
+| | `restart_cmd` | Restart process |
 | **GitHub** | `get_pr_comments` | Fetch PR comments |
-| | `add_pr_comment_respond` | Reply to PR comment |
+| | `add_pr_comment_respond` | Reply to comment |
 
 ## Voice Client
 
-The voice client provides hands-free interaction with the MCP server via Grok-4.
-
 ```bash
-./run.sh client                    # Full voice mode
-./run.sh client --text-only        # Text only
-./run.sh client --no-stt           # Type input, hear output  
-./run.sh client --no-tts           # Speak input, read output
-./run.sh client --voice rex        # Change voice
+voice start                    # Full voice mode
+voice start --text-only        # Text only
+voice start --no-stt           # Type + hear
+voice start --no-tts           # Speak + read
+voice start --voice rex        # Change voice
 ```
 
-**Available voices:** `ara`, `rex`, `sal`, `eve`, `una`, `leo`
+**Voices:** `ara`, `rex`, `sal`, `eve`, `una`, `leo`
 
-## Data Flow
+## Dynamic Tool Discovery
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant Client as Voice Client
-    participant Grok as Grok-4
-    participant MCP as MCP Server
-    participant Claude as Claude Agent
+The client discovers tools at runtime—no hardcoded definitions:
 
-    User->>Client: Voice input
-    Client->>Grok: Query + available tools
-    Grok->>Client: Tool call request
-    Client->>MCP: Execute tool
-    MCP->>Client: Tool result
-    Client->>Grok: Tool result
-    Grok->>Client: Natural language response
-    Client->>User: TTS output
+```python
+# Client starts, asks server "What can you do?"
+tools = await mcp_client.get_adaptable_tools()
+# Returns OpenAI/Grok-compatible function schemas
 ```
+
+Add a new tool to the server → client sees it immediately.
 
 ## Configuration
 
-### Environment Variables
-
-Create a `.env` file:
+### `.env`
 
 ```bash
-# Required
-XAI_API_KEY=your-xai-api-key
-
-# MCP Server URL (local or remote)
-MCP_BASE_URL=http://127.0.0.1:6030
-
-# Optional
-GH_TOKEN=your-github-token
+XAI_API_KEY=your-key
+MCP_BASE_URL=http://127.0.0.1:6030  # or https://your-domain.com
+GH_TOKEN=your-github-token          # optional
 ```
 
-### Project Environments
-
-Configure projects in `envs.json`:
+### `envs.json`
 
 ```json
 {
@@ -159,7 +143,7 @@ Configure projects in `envs.json`:
 ## Requirements
 
 - Python 3.10+
-- PyAudio for voice features: `brew install portaudio && pip install pyaudio`
+- PyAudio: `brew install portaudio && pip install pyaudio`
 
 ## License
 
