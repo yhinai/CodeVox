@@ -176,14 +176,14 @@ When you use a tool, wait for the result before providing your response."""
             
             frames = []
             silent_chunks = 0
-            is_speaking = False
+            has_spoken = False
             
             # Dynamic Recording Constants
             CHUNKS_PER_SECOND = self.sample_rate / self.chunk_size
             MAX_SILENCE_CHUNKS = int(1.5 * CHUNKS_PER_SECOND)  # 1.5s silence to stop
             MAX_TOTAL_CHUNKS = int(30.0 * CHUNKS_PER_SECOND)   # 30s max recording
             INITIAL_TIMEOUT_CHUNKS = int(5.0 * CHUNKS_PER_SECOND)  # 5s initial timeout
-            SILENCE_THRESHOLD = 500  # RMS threshold; adjust if too sensitive/insensitive
+            SILENCE_THRESHOLD = 200  # Lowered: RMS threshold for voice detection
             
             while len(frames) < MAX_TOTAL_CHUNKS:
                 data = stream.read(self.chunk_size, exception_on_overflow=False)
@@ -193,26 +193,30 @@ When you use a tool, wait for the result before providing your response."""
                 samples = struct.unpack(f'{len(data)//2}h', data)
                 rms = math.sqrt(sum(s**2 for s in samples) / len(samples)) if samples else 0
                 
-                # Visual feedback bar
-                level = min(int(rms / 1000), 10)
+                # Visual feedback bar (adjust scale for visibility)
+                level = min(int(rms / 500), 10)  # Scale to show activity
                 bar = "█" * level + "░" * (10 - level)
-                status = "Speaking" if is_speaking else "Listening"
-                print(f"\r🎤 {status}: [{bar}] {len(frames) / CHUNKS_PER_SECOND:.1f}s ", end="", flush=True)
                 
-                # Logic: Check for speech or silence
-                if rms > SILENCE_THRESHOLD:
-                    is_speaking = True
+                # Check if this chunk has speech
+                is_speech = rms > SILENCE_THRESHOLD
+                
+                if is_speech:
+                    has_spoken = True
                     silent_chunks = 0
+                    status = "Speaking"
                 else:
                     silent_chunks += 1
+                    status = "Silent" if has_spoken else "Waiting"
+                
+                print(f"\r🎤 {status}: [{bar}] {len(frames) / CHUNKS_PER_SECOND:.1f}s rms={int(rms)} ", end="", flush=True)
                 
                 # Stop if silence persists AFTER speech has started
-                if is_speaking and silent_chunks > MAX_SILENCE_CHUNKS:
+                if has_spoken and silent_chunks > MAX_SILENCE_CHUNKS:
                     print("✓ (Done)")
                     break
                 
                 # Stop if no speech detected initially (timeout after 5s)
-                if not is_speaking and len(frames) > INITIAL_TIMEOUT_CHUNKS:
+                if not has_spoken and len(frames) > INITIAL_TIMEOUT_CHUNKS:
                     print("× (Timeout)")
                     break
             
@@ -221,7 +225,7 @@ When you use a tool, wait for the result before providing your response."""
             p.terminate()
             
             # If we didn't detect meaningful speech, return None
-            if not is_speaking:
+            if not has_spoken:
                 return None
             
             # Convert to WAV
