@@ -1,6 +1,6 @@
 [project]
 name = "claude-code-mcp"
-version = "2.0.0"
+version = "2.1.0"
 description = "Lean MCP server for Claude Code with voice assistant"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -16,6 +16,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "structlog>=24.0.0",
     "aiofiles>=24.0.0",
+    "wsproto>=1.2.0",
     
     # GitHub integration
     "PyGithub>=2.0.0",
@@ -25,6 +26,10 @@ dependencies = [
     "websockets>=15.0.1",
     "aiohttp>=3.9.0",
     "pyaudio>=0.2.14",
+    
+    # Cross-platform audio and VAD
+    "sounddevice>=0.4.6",
+    "numpy>=1.26.0",
 ]
 
 [project.optional-dependencies]
