@@ -6,10 +6,14 @@ LOG_FILE="server.log"
 
 case "$1" in
     server)
-        if [ -f "$PID_FILE" ] && kill -0 $(cat "$PID_FILE") 2>/dev/null; then
-            echo "⚠️  Server already running (PID $(cat $PID_FILE))"
-            exit 1
+        # Kill any existing server on port 6030
+        lsof -ti :6030 | xargs kill -9 2>/dev/null || true
+        if [ -f "$PID_FILE" ]; then
+            kill $(cat "$PID_FILE") 2>/dev/null || true
+            rm -f "$PID_FILE"
         fi
+        sleep 1
+        
         echo "🚀 Starting Autonomous MCP Server v3.1..."
         nohup python -m server.main > $LOG_FILE 2>&1 &
         echo $! > $PID_FILE
@@ -24,14 +28,12 @@ case "$1" in
         fi
         ;;
     stop)
+        lsof -ti :6030 | xargs kill -9 2>/dev/null || true
         if [ -f "$PID_FILE" ]; then
             kill $(cat "$PID_FILE") 2>/dev/null || true
             rm -f "$PID_FILE"
-            echo "🛑 Stopped"
-        else
-            lsof -ti :6030 | xargs kill -9 2>/dev/null || true
-            echo "🛑 Stopped (by port)"
         fi
+        echo "🛑 Stopped"
         ;;
     restart)
         $0 stop && sleep 1 && $0 server
