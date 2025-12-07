@@ -1,6 +1,6 @@
 {
   "environments": {
-    "default": {
+    "foo": {
       "name": "Todo env",
       "path": "/home/green/code/claudia/test_repo",
       "run_script": "bash run.sh",

@@ -1,7 +1,6 @@
-"""MCP Client - Direct Python function calls to MCP tools."""
+"""MCP Client using FastMCP Python client."""
 
 import json
-import asyncio
 from typing import Dict, List, Any, Optional
 import structlog
 
@@ -9,112 +8,70 @@ log = structlog.get_logger()
 
 
 class MCPClient:
-    """Client that directly calls MCP tool functions from src module."""
+    """Client that uses FastMCP to connect to MCP servers."""
     
     def __init__(self, server_url: str):
         self.server_url = server_url
-        self._tools_loaded = False
-        self._env_module = None
-        self._process_module = None
-        self._github_module = None
-        self._claude_module = None
-    
-    def _ensure_loaded(self):
-        """Lazy load the MCP modules."""
-        if self._tools_loaded:
-            return
-        
-        try:
-            from src import environment as env_module
-            from src import process as process_module
-            from src import github as github_module
-            from src import claude as claude_module
-            
-            self._env_module = env_module
-            self._process_module = process_module
-            self._github_module = github_module
-            self._claude_module = claude_module
-            self._tools_loaded = True
-            log.info("mcp.modules.loaded")
-        except ImportError as e:
-            log.error("mcp.modules.import_error", error=str(e))
+        self._client = None
     
     async def call_tool(self, tool_name: str, arguments: Dict) -> Any:
-        """Call a tool by name with the given arguments."""
-        self._ensure_loaded()
-        
+        """Call a tool on the MCP server using FastMCP Client."""
         try:
-            # Environment tools
-            if tool_name == "list_environments":
-                data = self._env_module.load_envs()
-                envs = data.get("environments", {})
-                return {"environments": list(envs.keys())}
+            from fastmcp import Client
             
-            elif tool_name == "get_current_env":
-                env_name, env_path = self._env_module.get_current_environment()
-                if env_name:
-                    return {"name": env_name, "path": env_path}
-                # Fall back to sync detection
-                env_name, env_data = self._env_module.get_current_environment_sync()
-                return {"name": env_name, "path": env_data.get("path") if env_data else None}
-            
-            elif tool_name == "switch_environment":
-                env_name = arguments.get("environment_name", "")
-                env_data = self._env_module.get_environment_by_name(env_name)
-                if env_data:
-                    self._env_module.set_current_environment(env_name, env_data.get("path", ""))
-                    return {"success": True, "environment": env_name}
-                return {"success": False, "error": f"Environment '{env_name}' not found"}
-            
-            # Process tools
-            elif tool_name == "run_cmd":
-                env_name, env_path = self._env_module.get_current_environment()
-                if env_path:
-                    result = await self._process_module.run_process(
-                        cmd="./run.sh",
-                        cwd=env_path
-                    )
-                    return result
-                return {"error": "No environment set"}
-            
-            elif tool_name == "stop_cmd":
-                pid = arguments.get("pid", 0)
-                force = arguments.get("force", False)
-                result = await self._process_module.stop_process(pid, force)
-                return result
-            
-            # Claude tools
-            elif tool_name == "ask_coder":
-                query = arguments.get("query", "")
-                session = self._claude_module.ClaudeSession()
-                result = await session.run_query(query)
-                return {"response": result}
-            
-            elif tool_name == "get_status":
-                session = self._claude_module.ClaudeSession()
-                return {"running": session.is_running, "messages_count": len(session.messages)}
-            
-            # GitHub tools
-            elif tool_name == "get_pr_comments":
-                pr_number = arguments.get("pr_number", 0)
-                env_name, _ = self._env_module.get_current_environment()
-                envs = self._env_module.load_environments()
-                env = envs.get(env_name, {})
-                repo = env.get("repo", "")
-                if repo:
-                    comments = self._github_module.get_pr_comments(repo, pr_number)
-                    return {"comments": comments}
-                return {"error": "No repo configured for current environment"}
-            
-            else:
-                return {"error": f"Unknown tool: {tool_name}"}
+            client = Client(self.server_url)
+            async with client:
+                result = await client.call_tool(tool_name, arguments)
+                log.info("mcp.call_tool.raw_result", result=str(result)[:200])
                 
+                # FastMCP returns a CallToolResult with content list
+                if hasattr(result, 'content') and result.content:
+                    content = result.content
+                    if isinstance(content, list) and len(content) > 0:
+                        item = content[0]
+                        if hasattr(item, 'text'):
+                            text = item.text
+                            # Try to parse as JSON, otherwise return as string
+                            try:
+                                return json.loads(text)
+                            except:
+                                return {"result": text}
+                        return {"result": str(item)}
+                    return {"result": str(content)}
+                elif hasattr(result, 'data'):
+                    return result.data if result.data else {"result": "OK"}
+                else:
+                    return {"result": str(result)}
+                    
         except Exception as e:
             log.error("mcp.call_tool.error", tool=tool_name, error=str(e))
             return {"error": str(e)}
+    
+    async def list_tools(self) -> List[Dict]:
+        """List available tools from the MCP server."""
+        try:
+            from fastmcp import Client
+            
+            client = Client(self.server_url)
+            async with client:
+                tools = await client.list_tools()
+                return [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": t.name,
+                            "description": t.description or "",
+                            "parameters": t.inputSchema if hasattr(t, 'inputSchema') else {"type": "object", "properties": {}}
+                        }
+                    }
+                    for t in tools
+                ]
+        except Exception as e:
+            log.error("mcp.list_tools.error", error=str(e))
+            return []
 
 
-# Hardcoded tool definitions for the claude-code-mcp server
+# Hardcoded tool definitions as fallback
 CLAUDE_CODE_MCP_TOOLS = [
     {
         "type": "function",
