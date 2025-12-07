@@ -152,11 +152,9 @@ When you use a tool, wait for the result before providing your response."""
             log.error("stt.error", error=str(e))
             print(f"❌ STT Error: {e}")
             return input("💬 Type instead: ").strip()
-            print(f"❌ STT Error: {e}")
-            return input("💬 Type instead: ").strip()
     
-    def _capture_audio(self, duration: float = 5.0) -> Optional[bytes]:
-        """Capture audio from microphone with visual feedback."""
+    def _capture_audio(self) -> Optional[bytes]:
+        """Capture audio with dynamic silence detection (VAD)."""
         try:
             import pyaudio
             import wave
@@ -166,7 +164,6 @@ When you use a tool, wait for the result before providing your response."""
             
             p = pyaudio.PyAudio()
             
-            # Use default input device
             stream = p.open(
                 format=pyaudio.paInt16,
                 channels=1,
@@ -175,36 +172,59 @@ When you use a tool, wait for the result before providing your response."""
                 frames_per_buffer=self.chunk_size
             )
             
+            print("🎤 Listening... (Speak now) ", end="", flush=True)
+            
             frames = []
-            num_chunks = int(self.sample_rate / self.chunk_size * duration)
+            silent_chunks = 0
+            is_speaking = False
             
-            print("   Recording: ", end="", flush=True)
+            # Dynamic Recording Constants
+            CHUNKS_PER_SECOND = self.sample_rate / self.chunk_size
+            MAX_SILENCE_CHUNKS = int(1.5 * CHUNKS_PER_SECOND)  # 1.5s silence to stop
+            MAX_TOTAL_CHUNKS = int(30.0 * CHUNKS_PER_SECOND)   # 30s max recording
+            INITIAL_TIMEOUT_CHUNKS = int(5.0 * CHUNKS_PER_SECOND)  # 5s initial timeout
+            SILENCE_THRESHOLD = 500  # RMS threshold; adjust if too sensitive/insensitive
             
-            for i in range(num_chunks):
+            while len(frames) < MAX_TOTAL_CHUNKS:
                 data = stream.read(self.chunk_size, exception_on_overflow=False)
                 frames.append(data)
                 
-                # Show progress every 0.5 seconds
-                if i % int(self.sample_rate / self.chunk_size / 2) == 0:
-                    # Calculate audio level
-                    samples = struct.unpack(f'{len(data)//2}h', data)
-                    rms = math.sqrt(sum(s**2 for s in samples) / len(samples)) if samples else 0
-                    level = min(int(rms / 1000), 10)
-                    bar = "█" * level + "░" * (10 - level)
-                    print(f"\r   Recording: [{bar}] {i * self.chunk_size / self.sample_rate:.1f}s ", end="", flush=True)
-            
-            print("✓")
+                # Calculate audio level (RMS)
+                samples = struct.unpack(f'{len(data)//2}h', data)
+                rms = math.sqrt(sum(s**2 for s in samples) / len(samples)) if samples else 0
+                
+                # Visual feedback bar
+                level = min(int(rms / 1000), 10)
+                bar = "█" * level + "░" * (10 - level)
+                status = "Speaking" if is_speaking else "Listening"
+                print(f"\r🎤 {status}: [{bar}] {len(frames) / CHUNKS_PER_SECOND:.1f}s ", end="", flush=True)
+                
+                # Logic: Check for speech or silence
+                if rms > SILENCE_THRESHOLD:
+                    is_speaking = True
+                    silent_chunks = 0
+                else:
+                    silent_chunks += 1
+                
+                # Stop if silence persists AFTER speech has started
+                if is_speaking and silent_chunks > MAX_SILENCE_CHUNKS:
+                    print("✓ (Done)")
+                    break
+                
+                # Stop if no speech detected initially (timeout after 5s)
+                if not is_speaking and len(frames) > INITIAL_TIMEOUT_CHUNKS:
+                    print("× (Timeout)")
+                    break
             
             stream.stop_stream()
             stream.close()
             p.terminate()
             
-            # Check if we captured any audio
-            if not frames:
-                print("   ⚠️ No audio frames captured")
+            # If we didn't detect meaningful speech, return None
+            if not is_speaking:
                 return None
             
-            # Convert to WAV format
+            # Convert to WAV
             buffer = io.BytesIO()
             with wave.open(buffer, 'wb') as wf:
                 wf.setnchannels(1)
@@ -213,7 +233,7 @@ When you use a tool, wait for the result before providing your response."""
                 wf.writeframes(b''.join(frames))
             
             audio_bytes = buffer.getvalue()
-            print(f"   Captured {len(audio_bytes)} bytes of audio")
+            print(f"   Captured {len(audio_bytes)} bytes ({len(frames) / CHUNKS_PER_SECOND:.1f}s)")
             return audio_bytes
             
         except Exception as e:
