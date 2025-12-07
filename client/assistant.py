@@ -146,7 +146,7 @@ Be concise since responses will be spoken aloud."""
             messages.append({"role": "user", "content": query})
             
             async with aiohttp.ClientSession() as session:
-                for iteration in range(5):
+                for iteration in range(100):
                     payload = {
                         "model": self.model,
                         "messages": messages,
