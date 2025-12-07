@@ -1,6 +1,6 @@
 """
 Claude SDK integration - Updated for claude_agent_sdk v0.1.13+
-Uses ClaudeSDKClient instead of deprecated ClaudeAgent.
+Uses ClaudeSDKClient with query() + receive_messages() pattern.
 """
 import asyncio
 import time
@@ -40,7 +40,6 @@ class ClaudeSession:
         self.running = False
         self.messages: List[ClaudeMessage] = []
         self.start_time: Optional[float] = None
-        self.first_response: Optional[str] = None
 
     def is_running(self) -> bool:
         return self.running
@@ -69,18 +68,20 @@ class ClaudeSession:
 
         self.running = True
         self.start_time = time.time()
-        self.first_response = None
         self.messages.clear()
-
+        
         log.info("claude.ask.started", query_preview=query[:100])
+        first_response = None
 
         try:
-            options = ClaudeAgentOptions(
-                cwd=self.working_dir,
-            )
+            options = ClaudeAgentOptions(cwd=self.working_dir)
             
             async with ClaudeSDKClient(options) as client:
-                async for message in client.query(query):
+                # Send query (non-blocking)
+                await client.query(query)
+                
+                # Receive messages
+                async for message in client.receive_messages():
                     content = self._extract_content(message)
                     
                     if content:
@@ -90,14 +91,14 @@ class ClaudeSession:
                             raw=message
                         ))
                         
-                        if self.first_response is None:
-                            self.first_response = content
+                        if first_response is None:
+                            first_response = content
                             log.info("claude.first_response", preview=content[:100])
                     
                     if isinstance(message, ResultMessage):
                         break
             
-            return self.first_response or "No response from Claude"
+            return first_response or "No response from Claude"
             
         except Exception as e:
             log.error("claude.error", error=str(e))
