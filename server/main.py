@@ -68,6 +68,12 @@ def get_process_stats() -> str:
     return engine.get_process_stats()
 
 
+@mcp.tool()
+async def stop_process(pid: int) -> str:
+    """Stop a background process by PID."""
+    return await engine.stop_process(pid)
+
+
 # =============================================================================
 # GITHUB TOOLS
 # =============================================================================
@@ -121,10 +127,10 @@ def main():
     
     print(f"""
 ╔══════════════════════════════════════════════════════════════╗
-║           Claude Autonomous MCP Server                       ║
+║           Claude Autonomous MCP Server v3.1                  ║
 ╠══════════════════════════════════════════════════════════════╣
 ║  URL: {settings.mcp_endpoint:<53} ║
-║  Tools: 7 (discovery, execution, github, claude)             ║
+║  Tools: 8 (discovery, execution, github, claude)             ║
 ╠══════════════════════════════════════════════════════════════╣
 ║  {discovery_result.split(chr(10))[0]:<60} ║
 ╚══════════════════════════════════════════════════════════════╝
