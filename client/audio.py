@@ -113,8 +113,8 @@ class AudioCapture:
                 # --- VISUALIZATION LOGIC ---
                 # Scale bar relative to threshold
                 scale = max(self.silence_threshold * 2, 1000)
-                level = min(int((rms / scale) * 10), 10)
-                bar = "█" * level + "░" * (10 - level)
+                level = min(int((rms / scale) * 20), 20)
+                bar = "█" * level + "░" * (20 - level)
                 
                 duration = len(frames) / chunks_per_second
                 status = "Listening"
