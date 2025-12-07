@@ -1,11 +1,10 @@
 """
-Audio Capture - Adaptive Voice Activity Detection (VAD)
-v3.1 - Auto-calibrates to room noise for accurate speech detection.
+Audio Capture - Adaptive VAD with Terminal Animation
+v3.2 - Auto-calibrates to room noise and visualizes recording levels.
 """
 import io
 import math
 import struct
-import time
 import structlog
 
 log = structlog.get_logger()
@@ -22,15 +21,13 @@ except ImportError:
 
 
 class AudioCapture:
-    """Adaptive VAD with noise calibration."""
+    """Adaptive VAD with noise calibration and terminal visualization."""
     
     def __init__(self, sample_rate: int = 24000, chunk_size: int = 1024):
         self.sample_rate = sample_rate
         self.chunk_size = chunk_size
         self.silence_threshold = 500  # Default, will calibrate
         self.calibrated = False
-        self._stream = None
-        self._pyaudio = None
     
     def calibrate(self, stream, seconds: float = 1.0) -> None:
         """Measure background noise to set adaptive threshold."""
@@ -67,7 +64,7 @@ class AudioCapture:
             return 0.0
     
     def capture(self) -> bytes | None:
-        """Capture speech with adaptive VAD. Returns WAV bytes or None."""
+        """Capture speech with live terminal animation."""
         if not PYAUDIO_AVAILABLE:
             log.error("audio.not_available")
             return None
@@ -92,18 +89,17 @@ class AudioCapture:
             if not self.calibrated:
                 self.calibrate(stream)
             
-            print("🎤 Listening... ", end="", flush=True)
+            print("🎤 Ready...", end="", flush=True)
             
             frames = []
             silent_chunks = 0
             has_spoken = False
             
-            # 1.5 seconds of silence to stop
-            max_silence = int(1.5 * self.sample_rate / self.chunk_size)
-            # 10 second max recording
-            max_frames = int(10 * self.sample_rate / self.chunk_size)
-            # 5 second timeout if no speech
-            no_speech_timeout = int(5 * self.sample_rate / self.chunk_size)
+            # Timing calculations
+            chunks_per_second = self.sample_rate / self.chunk_size
+            max_silence = int(1.5 * chunks_per_second)
+            max_frames = int(30 * chunks_per_second)  # 30s max
+            no_speech_timeout = int(5 * chunks_per_second)
             
             while len(frames) < max_frames:
                 try:
@@ -114,24 +110,39 @@ class AudioCapture:
                 frames.append(data)
                 rms = self._calculate_rms(data)
                 
+                # --- VISUALIZATION LOGIC ---
+                # Scale bar relative to threshold
+                scale = max(self.silence_threshold * 2, 1000)
+                level = min(int((rms / scale) * 10), 10)
+                bar = "█" * level + "░" * (10 - level)
+                
+                duration = len(frames) / chunks_per_second
+                status = "Listening"
+                
                 if rms > self.silence_threshold:
                     has_spoken = True
                     silent_chunks = 0
+                    status = "Speaking "
                 else:
                     silent_chunks += 1
+                    if has_spoken:
+                        status = "Silence  "
+                
+                # Live update line
+                print(f"\r🎤 {status} [{bar}] {duration:.1f}s", end="", flush=True)
+                # ---------------------------
                 
                 # Stop conditions
                 if has_spoken and silent_chunks > max_silence:
                     break
                 if not has_spoken and len(frames) > no_speech_timeout:
-                    print("(timeout)")
+                    print("\n⚠️  Timeout: No speech detected")
                     return None
             
-            if not has_spoken:
-                print("(no speech)")
-                return None
+            print()  # Move to next line
             
-            print(f"({len(frames)} chunks)")
+            if not has_spoken:
+                return None
             
             # Convert to WAV
             buffer = io.BytesIO()
