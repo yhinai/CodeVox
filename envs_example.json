@@ -1,0 +1,12 @@
+{
+  "environments": {
+    "default": {
+      "name": "Claudia Environment",
+      "path": "/home/green/code/claudia/claude_code_mcp",
+      "run_script": "",
+      "description": "Claudia Environment"
+    }
+  },
+  
+  "current_env": ""
+}
